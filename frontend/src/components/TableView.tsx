@@ -1,23 +1,44 @@
-import type { PrivateState, PublicState } from "../lib/types";
+import type { PrivateState, PublicState, SeatInfo } from "../lib/types";
 
 interface TableViewProps {
   publicState: PublicState | null;
   privateState: PrivateState | null;
+  seats: (SeatInfo | null)[];
 }
 
-export function TableView({ publicState, privateState }: TableViewProps) {
+export function TableView({ publicState, privateState, seats }: TableViewProps) {
+  // No hand yet: show seats from the seats snapshot.
   if (!publicState) {
+    const occupied = seats.filter((s) => s != null);
     return (
       <div
         style={{
           padding: "2rem",
-          border: "1px dashed #444",
-          borderRadius: 8,
+          border: "1px dashed #2a4d3f",
+          borderRadius: 16,
+          background: "#143027",
           textAlign: "center",
-          opacity: 0.7,
         }}
       >
-        Waiting for hand to start...
+        <div style={{ opacity: 0.7, marginBottom: "1rem" }}>
+          {occupied.length < 2
+            ? `Waiting for players (${occupied.length}/2 seated)...`
+            : "Starting hand..."}
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "center" }}>
+          {occupied.map((s) => (
+            <div
+              key={s!.seat}
+              style={{
+                padding: "0.5rem 0.75rem",
+                background: "#1a3a30",
+                borderRadius: 6,
+              }}
+            >
+              {s!.user_id} · {s!.stack}
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -42,6 +63,7 @@ export function TableView({ publicState, privateState }: TableViewProps) {
           justifyContent: "center",
           gap: "0.5rem",
           marginBottom: "1rem",
+          minHeight: 70,
         }}
       >
         {publicState.board.length === 0 ? (
@@ -63,12 +85,31 @@ export function TableView({ publicState, privateState }: TableViewProps) {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
           gap: "0.75rem",
         }}
       >
         {publicState.players.map((p, i) => {
           if (!p) {
+            const seat = seats[i];
+            if (seat) {
+              return (
+                <div
+                  key={i}
+                  style={{
+                    padding: "0.75rem",
+                    border: "1px dashed #2a4d3f",
+                    borderRadius: 8,
+                    opacity: 0.6,
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  <div style={{ fontWeight: 600 }}>{seat.user_id}</div>
+                  <div style={{ opacity: 0.8 }}>Stack: {seat.stack}</div>
+                  <div style={{ opacity: 0.6 }}>Sitting out this hand</div>
+                </div>
+              );
+            }
             return (
               <div
                 key={i}
@@ -99,7 +140,7 @@ export function TableView({ publicState, privateState }: TableViewProps) {
               }}
             >
               <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ fontWeight: 600 }}>{p.id.slice(0, 10)}</span>
+                <span style={{ fontWeight: 600 }}>{p.id}</span>
                 {isButton && <span style={{ fontSize: "0.75rem" }}>D</span>}
               </div>
               <div style={{ fontSize: "0.85rem", opacity: 0.8 }}>
@@ -109,6 +150,14 @@ export function TableView({ publicState, privateState }: TableViewProps) {
               <div style={{ fontSize: "0.75rem", opacity: 0.6 }}>
                 {p.status} {p.last_action ? `· ${p.last_action}` : ""}
               </div>
+              {/* Showdown reveal */}
+              {p.hole && (
+                <div style={{ display: "flex", gap: "0.25rem", marginTop: "0.4rem" }}>
+                  {p.hole.map((c, j) => (
+                    <CardView key={j} card={c} small />
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
@@ -134,16 +183,18 @@ export function TableView({ publicState, privateState }: TableViewProps) {
   );
 }
 
-function CardView({ card }: { card: string }) {
+function CardView({ card, small = false }: { card: string; small?: boolean }) {
   const rank = card[0];
   const suit = card[1];
   const isRed = suit === "h" || suit === "d";
-  const suitChar = { s: "♠", h: "♥", d: "♦", c: "♣" }[suit] ?? suit;
+  const suitChar = ({ s: "♠", h: "♥", d: "♦", c: "♣" } as Record<string, string>)[suit] ?? suit;
+  const w = small ? 32 : 48;
+  const h = small ? 46 : 68;
   return (
     <div
       style={{
-        width: 48,
-        height: 68,
+        width: w,
+        height: h,
         background: "#fff",
         color: isRed ? "#c33" : "#222",
         border: "1px solid #888",
@@ -153,10 +204,11 @@ function CardView({ card }: { card: string }) {
         alignItems: "center",
         justifyContent: "center",
         fontWeight: 700,
+        fontSize: small ? "0.75rem" : "1rem",
       }}
     >
       <div>{rank}</div>
-      <div style={{ fontSize: "1.4rem", lineHeight: 1 }}>{suitChar}</div>
+      <div style={{ fontSize: small ? "1rem" : "1.4rem", lineHeight: 1 }}>{suitChar}</div>
     </div>
   );
 }

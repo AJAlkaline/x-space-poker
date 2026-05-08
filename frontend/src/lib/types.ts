@@ -1,9 +1,26 @@
-// Mirrors backend `_public_view()` in services/table_manager.py.
-// Keep in sync — there's no shared schema yet (TODO: generate from pydantic).
+// Mirrors backend `services/table_manager.py` view helpers.
 
-export type Phase = "pre_deal" | "pre_flop" | "flop" | "turn" | "river" | "showdown" | "complete";
-export type PlayerStatus = "active" | "folded" | "all_in" | "sitting_out" | "disconnected";
-export type ActionType = "fold" | "check" | "call" | "bet" | "raise" | "post_blind";
+export type Phase =
+  | "pre_deal"
+  | "pre_flop"
+  | "flop"
+  | "turn"
+  | "river"
+  | "showdown"
+  | "complete";
+export type PlayerStatus =
+  | "active"
+  | "folded"
+  | "all_in"
+  | "sitting_out"
+  | "disconnected";
+export type ActionType =
+  | "fold"
+  | "check"
+  | "call"
+  | "bet"
+  | "raise"
+  | "post_blind";
 
 export interface PublicPlayer {
   id: string;
@@ -12,6 +29,7 @@ export interface PublicPlayer {
   status: PlayerStatus;
   street_committed: number;
   last_action: ActionType | null;
+  hole: string[] | null;
 }
 
 export interface PublicPot {
@@ -28,33 +46,36 @@ export interface PublicState {
   min_raise: number;
   to_act: string[];
   button: number;
+  small_blind: number;
+  big_blind: number;
   players: (PublicPlayer | null)[];
-}
-
-export interface PrivateState {
-  hole: [string, string] | null;
-  legal_actions: LegalAction[];
-  action_deadline_unix?: number;
 }
 
 export interface LegalAction {
   action_type: ActionType;
-  min_amount?: number;
-  max_amount?: number;
+  min_amount: number;
+  max_amount: number;
+}
+
+export interface PrivateState {
+  hole: [string, string] | null;
+  your_turn: boolean;
+  legal_actions: LegalAction[];
+}
+
+export interface SeatInfo {
+  seat: number;
+  user_id: string;
+  stack: number;
 }
 
 export type ServerMessage =
   | { type: "hand_started"; state: PublicState }
   | { type: "state_update"; state: PublicState }
+  | { type: "hand_complete"; state: PublicState }
   | { type: "private"; state: PrivateState }
-  | { type: "your_turn"; deadline_unix: number }
+  | { type: "seats"; seats: (SeatInfo | null)[] }
   | { type: "illegal_action"; error: string }
-  | { type: "ack" };
+  | { type: "table_error"; error: string };
 
-export type ClientMessage =
-  | { type: "action"; action: ActionType; amount?: number }
-  | { type: "ack_prompt" }
-  | { type: "sit_out" }
-  | { type: "sit_in" }
-  | { type: "buy_in"; amount: number }
-  | { type: "leave" };
+export type ClientMessage = { type: "action"; action: ActionType; amount?: number };

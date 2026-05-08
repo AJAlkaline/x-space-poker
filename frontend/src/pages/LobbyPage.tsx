@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useHandle } from "../lib/useHandle";
 
 export function LobbyPage() {
   const navigate = useNavigate();
+  const { handle } = useHandle();
   const [joinCode, setJoinCode] = useState("");
   const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -14,9 +17,11 @@ export function LobbyPage() {
   };
 
   const handleCreate = async () => {
+    if (!handle) return;
     setCreating(true);
+    setError(null);
     try {
-      const res = await fetch("/api/tables", {
+      const res = await fetch(`/api/tables?as=${encodeURIComponent(handle)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ small_blind: 5, big_blind: 10, max_seats: 9 }),
@@ -25,7 +30,7 @@ export function LobbyPage() {
       const data = (await res.json()) as { table_id: string; code: string };
       navigate(`/table/${data.code}`);
     } catch (err) {
-      alert(`Failed to create table: ${err}`);
+      setError(`Failed to create table: ${err}`);
     } finally {
       setCreating(false);
     }
@@ -33,6 +38,19 @@ export function LobbyPage() {
 
   return (
     <div style={{ maxWidth: 480, margin: "0 auto", display: "grid", gap: "2rem" }}>
+      {error && (
+        <div
+          style={{
+            padding: "0.5rem 1rem",
+            border: "1px solid #a33",
+            borderRadius: 6,
+            color: "#f99",
+          }}
+        >
+          {error}
+        </div>
+      )}
+
       <section>
         <h2>Join a table</h2>
         <form onSubmit={handleJoin} style={{ display: "flex", gap: "0.5rem" }}>

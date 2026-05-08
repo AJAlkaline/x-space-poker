@@ -2,22 +2,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientMessage, ServerMessage } from "./types";
 
 interface UseTableSocketOptions {
-  url: string | null;
+  code: string;
+  handle: string;
   onMessage: (msg: ServerMessage) => void;
 }
 
-/**
- * WebSocket hook with auto-reconnect (capped backoff).
- * Returns a `send()` that buffers messages until the socket is open.
- */
-export function useTableSocket({ url, onMessage }: UseTableSocketOptions) {
+export function useTableSocket({ code, handle, onMessage }: UseTableSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const queueRef = useRef<ClientMessage[]>([]);
   const reconnectTimerRef = useRef<number | null>(null);
   const attemptRef = useRef(0);
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
-  const [status, setStatus] = useState<"idle" | "connecting" | "open" | "closed">("idle");
+  const [status, setStatus] = useState<"idle" | "connecting" | "open" | "closed">(
+    "idle"
+  );
 
   const send = useCallback((msg: ClientMessage) => {
     const ws = wsRef.current;
@@ -29,12 +28,16 @@ export function useTableSocket({ url, onMessage }: UseTableSocketOptions) {
   }, []);
 
   useEffect(() => {
-    if (!url) {
+    if (!code || !handle) {
       setStatus("idle");
       return;
     }
-
     let cancelled = false;
+    // Vite dev proxies /ws → backend; same path in prod.
+    const url =
+      `${location.protocol === "https:" ? "wss:" : "ws:"}` +
+      `//${location.host}/ws/tables/${encodeURIComponent(code)}` +
+      `?as=${encodeURIComponent(handle)}`;
 
     const connect = () => {
       if (cancelled) return;
@@ -45,13 +48,11 @@ export function useTableSocket({ url, onMessage }: UseTableSocketOptions) {
       ws.onopen = () => {
         attemptRef.current = 0;
         setStatus("open");
-        // Drain any queued messages
         while (queueRef.current.length > 0) {
           const m = queueRef.current.shift()!;
           ws.send(JSON.stringify(m));
         }
       };
-
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data) as ServerMessage;
@@ -60,32 +61,24 @@ export function useTableSocket({ url, onMessage }: UseTableSocketOptions) {
           // Ignore malformed
         }
       };
-
       ws.onclose = () => {
         setStatus("closed");
         wsRef.current = null;
         if (cancelled) return;
-        // Exponential backoff: 0.5, 1, 2, 4, 8s capped at 8s
         const delay = Math.min(8000, 500 * 2 ** attemptRef.current++);
         reconnectTimerRef.current = window.setTimeout(connect, delay);
       };
-
-      ws.onerror = () => {
-        ws.close();
-      };
+      ws.onerror = () => ws.close();
     };
 
     connect();
-
     return () => {
       cancelled = true;
-      if (reconnectTimerRef.current) {
-        window.clearTimeout(reconnectTimerRef.current);
-      }
+      if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [url]);
+  }, [code, handle]);
 
   return { send, status };
 }

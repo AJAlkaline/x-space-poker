@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ActionType, PrivateState, PublicState } from "../lib/types";
 
 interface ActionBarProps {
@@ -8,10 +8,16 @@ interface ActionBarProps {
 }
 
 export function ActionBar({ publicState, privateState, onAction }: ActionBarProps) {
-  const [betAmount, setBetAmount] = useState<number>(0);
   const legals = privateState?.legal_actions ?? [];
+  const yourTurn = privateState?.your_turn ?? false;
+  const [betAmount, setBetAmount] = useState<number>(0);
 
-  if (!publicState || legals.length === 0) {
+  // Reset bet amount when it's no longer your turn (so the slider starts fresh next time).
+  useEffect(() => {
+    if (!yourTurn) setBetAmount(0);
+  }, [yourTurn, publicState?.hand_id]);
+
+  if (!publicState || !yourTurn || legals.length === 0) {
     return (
       <div
         style={{
@@ -50,7 +56,7 @@ export function ActionBar({ publicState, privateState, onAction }: ActionBarProp
     <div
       style={{
         padding: "1rem",
-        border: "1px solid #2a2e36",
+        border: "2px solid #f5c542",
         borderRadius: 8,
         display: "grid",
         gap: "0.75rem",
@@ -82,7 +88,9 @@ export function ActionBar({ publicState, privateState, onAction }: ActionBarProp
             {presets.map((p) => (
               <button
                 key={p.label}
-                onClick={() => setBetAmount(Math.min(maxSize, Math.max(minSize, p.amount)))}
+                onClick={() =>
+                  setBetAmount(Math.min(maxSize, Math.max(minSize, p.amount)))
+                }
                 style={{ fontSize: "0.85rem", padding: "0.3rem 0.6rem" }}
               >
                 {p.label}

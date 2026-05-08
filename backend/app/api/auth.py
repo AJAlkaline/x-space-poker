@@ -1,59 +1,52 @@
-"""X OAuth 2.0 PKCE flow.
+"""Path A authentication: trust a `?as=<name>` query parameter.
 
-Minimal sketch — the real implementation needs:
-- PKCE code_verifier storage (Redis with short TTL)
-- State parameter to prevent CSRF
-- Token storage (we only need access for the initial /users/me call)
-- JWT issuance for our own session
+This is for local two-tab playtesting only. The real X OAuth flow will replace
+this later — when it does, the `current_player_id` dependency is the only
+thing other modules import from here, so the swap is contained.
+
+Also exposes a per-player in-memory chip balance ("wallet") so buy-ins debit
+something. Resets on process restart.
 """
 from __future__ import annotations
 
-import secrets
-from urllib.parse import urlencode
+import re
+from collections import defaultdict
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-
-from app.core.config import get_settings
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 router = APIRouter()
 
+_HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{2,20}$")
+_DEFAULT_BALANCE = 10_000  # 10k chips ≈ 10 buy-ins at 5/10 100bb
 
-class LoginUrl(BaseModel):
-    url: str
-    state: str
-
-
-@router.get("/login", response_model=LoginUrl)
-async def login_url() -> LoginUrl:
-    settings = get_settings()
-    if not settings.x_client_id:
-        raise HTTPException(503, "X OAuth not configured")
-    state = secrets.token_urlsafe(32)
-    # TODO: persist (state, code_verifier) in Redis with 10-minute TTL
-    code_challenge = "todo-pkce-challenge"
-    params = {
-        "response_type": "code",
-        "client_id": settings.x_client_id,
-        "redirect_uri": settings.x_redirect_uri,
-        "scope": "tweet.read users.read offline.access",
-        "state": state,
-        "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
-    }
-    return LoginUrl(
-        url=f"https://twitter.com/i/oauth2/authorize?{urlencode(params)}",
-        state=state,
-    )
+_balances: dict[str, int] = defaultdict(lambda: _DEFAULT_BALANCE)
 
 
-class Callback(BaseModel):
-    code: str
-    state: str
+def current_player_id(as_: Annotated[str, Query(alias="as")]) -> str:
+    """FastAPI dependency: pulls `?as=<handle>` from query and validates."""
+    if not _HANDLE_RE.match(as_):
+        raise HTTPException(400, "invalid handle (2-20 chars, alphanumeric + _)")
+    _ = _balances[as_]  # ensure wallet entry exists
+    return as_
 
 
-@router.post("/callback")
-async def callback(payload: Callback):
-    """Exchange the authorization code for tokens, fetch user, issue our JWT."""
-    # TODO: verify state, exchange code, hit /2/users/me, upsert User row, return JWT
-    raise HTTPException(501, "not implemented")
+PlayerId = Annotated[str, Depends(current_player_id)]
+
+
+def get_balance(player_id: str) -> int:
+    return _balances[player_id]
+
+
+def adjust_balance(player_id: str, delta: int) -> int:
+    """Adjust a player's chip balance. Negative delta debits."""
+    new_balance = _balances[player_id] + delta
+    if new_balance < 0:
+        raise HTTPException(400, "insufficient chips")
+    _balances[player_id] = new_balance
+    return new_balance
+
+
+@router.get("/me")
+async def me(player_id: PlayerId) -> dict:
+    return {"player_id": player_id, "balance": get_balance(player_id)}

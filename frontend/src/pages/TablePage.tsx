@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { useHandle } from "../lib/useHandle";
+import { useSession as useHandle } from "../lib/useSession";
 import { useTableSocket } from "../lib/useTableSocket";
 import type {
   PrivateState,
@@ -85,6 +85,7 @@ export function TablePage() {
     try {
       const res = await fetch(`/api/tables/join?as=${encodeURIComponent(handle)}`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code, seat: seatNumber, buy_in: DEFAULT_BUY_IN }),
       });

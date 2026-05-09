@@ -12,16 +12,42 @@ from app.core.config import get_settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: rehydrate active tables from DB if persistence is enabled.
+    settings = get_settings()
+    log = __import__("logging").getLogger(__name__)
+    redis_client = None
+
+    # When persistence is enabled, install the Redis-backed OAuth state store
+    # so the PKCE flow works across multiple processes. Redis is connected
+    # lazily by the client; if it's unreachable, OAuth flows will fail when
+    # they try to put/pop state, but the app stays up.
+    if settings.persistence_enabled:
+        try:
+            import redis.asyncio as redis_async
+
+            from app.api import auth as auth_module
+            from app.services.oauth import RedisStateStore
+            redis_client = redis_async.from_url(settings.redis_url)
+            auth_module.set_state_store(RedisStateStore(redis_client))
+            log.info("OAuth state store: Redis at %s", settings.redis_url)
+        except Exception:
+            log.exception("failed to install Redis state store; OAuth across "
+                          "multiple processes will fail")
+
+    # Rehydrate active tables from DB if persistence is enabled.
     from app.services.recovery import recover_tables
     try:
         await recover_tables()
     except Exception:
-        # Don't block startup on recovery failure — operator can fix and restart.
-        import logging
-        logging.getLogger(__name__).exception("recovery failed at startup")
+        log.exception("recovery failed at startup")
+
     yield
-    # Shutdown: close clients
+
+    # Shutdown: close the Redis client if we opened one.
+    if redis_client is not None:
+        try:
+            await redis_client.aclose()
+        except Exception:
+            log.exception("error closing Redis client on shutdown")
 
 
 def create_app() -> FastAPI:

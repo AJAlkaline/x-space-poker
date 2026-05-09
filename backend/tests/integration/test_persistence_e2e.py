@@ -60,7 +60,8 @@ def _drain_until(ws, types, cap=40):
 
 
 def test_buy_in_persists_to_db(client: TestClient) -> None:
-    """A buy-in should debit the persisted account."""
+    """A buy-in should debit the persisted account, and /auth/me must
+    reflect the DB balance (not the in-memory wallet)."""
     res = client.post(
         "/tables", params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
@@ -68,19 +69,23 @@ def test_buy_in_persists_to_db(client: TestClient) -> None:
     assert res.status_code == 200, res.text
     code = res.json()["code"]
 
-    # Alice's account should now exist (created on table creation via
-    # persist_table flow). Join debits 1000.
+    # Initial balance: 10_000 (from ensure_account_for_handle's signup grant).
+    res = client.get("/auth/me", params={"as": "alice"})
+    assert res.status_code == 200
+    assert res.json()["balance"] == 10_000
+
+    # Join debits 1000.
     res = client.post(
         "/tables/join", params={"as": "alice"},
         json={"code": code, "seat": 0, "buy_in": 1000},
     )
     assert res.status_code == 200, res.text
 
-    # /auth/me should reflect the debit.
+    # /auth/me should now reflect the debit. Before the wart fix this
+    # returned 10_000 (in-memory wallet untouched); now it returns 9_000.
     res = client.get("/auth/me", params={"as": "alice"})
-    # Note: in persistence mode, /auth/me still uses the in-memory wallet.
-    # That's a known wart — it'll be unified when we drop the in-memory wallet.
-    # For now we read the account directly.
+    assert res.status_code == 200
+    assert res.json()["balance"] == 9_000
 
 
 def test_completed_hand_is_replayable(client: TestClient) -> None:

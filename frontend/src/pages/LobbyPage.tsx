@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useHandle } from "../lib/useHandle";
+import { useSession as useHandle } from "../lib/useSession";
 
 export function LobbyPage() {
   const navigate = useNavigate();
@@ -23,6 +23,7 @@ export function LobbyPage() {
     try {
       const res = await fetch(`/api/tables?as=${encodeURIComponent(handle)}`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ small_blind: 5, big_blind: 10, max_seats: 9 }),
       });

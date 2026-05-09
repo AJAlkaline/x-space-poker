@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { useHandle } from "../lib/useHandle";
+import { useSession as useHandle } from "../lib/useSession";
 import type {
   PublicState,
   SeatInfo,

@@ -57,6 +57,11 @@ class Settings(BaseSettings):
 
     # Feature flags
     persistence_enabled: bool = False
+    # Auth mode: "fake" (uses ?as=<handle> for dev/test), "x_oauth" (production
+    # OAuth via X), or "both" (tries JWT cookie first, falls back to ?as).
+    # Default "both" — tests keep working, production sets to "x_oauth" to
+    # disable the fake path.
+    auth_mode: str = "both"
 
 
 @lru_cache

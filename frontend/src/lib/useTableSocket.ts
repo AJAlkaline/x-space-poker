@@ -3,7 +3,7 @@ import type { ClientMessage, ServerMessage } from "./types";
 
 interface UseTableSocketOptions {
   code: string;
-  handle: string;
+  handle: string | null;
   onMessage: (msg: ServerMessage) => void;
 }
 
@@ -28,16 +28,19 @@ export function useTableSocket({ code, handle, onMessage }: UseTableSocketOption
   }, []);
 
   useEffect(() => {
-    if (!code || !handle) {
+    if (!code) {
       setStatus("idle");
       return;
     }
     let cancelled = false;
     // Vite dev proxies /ws → backend; same path in prod.
+    // The session cookie is sent automatically on the handshake. ?as= is
+    // appended only if we're using fake auth (no cookie set yet) — the
+    // backend prefers the cookie when both are present.
+    const qs = handle ? `?as=${encodeURIComponent(handle)}` : "";
     const url =
       `${location.protocol === "https:" ? "wss:" : "ws:"}` +
-      `//${location.host}/ws/tables/${encodeURIComponent(code)}` +
-      `?as=${encodeURIComponent(handle)}`;
+      `//${location.host}/ws/tables/${encodeURIComponent(code)}${qs}`;
 
     const connect = () => {
       if (cancelled) return;

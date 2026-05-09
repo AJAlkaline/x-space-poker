@@ -73,6 +73,10 @@ def test_two_players_play_a_hand(client: TestClient) -> None:
         alice_start = _drain_until(ws_alice, ["hand_started"])
         bob_start = _drain_until(ws_bob, ["hand_started"])
 
+        # Pot starts at 15 (SB 5 + BB 10), even though no Pot object exists yet.
+        assert alice_start["state"]["pot_total"] == 15
+        assert bob_start["state"]["pot_total"] == 15
+
         # ---- Hidden information audit ----
         # Public state must not contain hole cards for any player.
         for snapshot in (alice_start, bob_start):
@@ -112,3 +116,60 @@ def test_two_players_play_a_hand(client: TestClient) -> None:
                 assert p.get("hole") is None
             elif p["id"] == "bob":
                 assert p.get("hole") is not None  # winner reveal is fine
+
+
+def test_pot_updates_through_betting_round(client: TestClient) -> None:
+    """Regression: pot_total should update on every action, not just at hand end."""
+    res = client.post(
+        "/tables",
+        params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+
+    with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+         client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+
+        _drain_until(ws_a, ["seats"])
+        _drain_until(ws_b, ["seats"])
+
+        for who, seat in [("alice", 0), ("bob", 1)]:
+            client.post(
+                "/tables/join",
+                params={"as": who},
+                json={"code": code, "seat": seat, "buy_in": 1000},
+            )
+
+        a_start = _drain_until(ws_a, ["hand_started"])
+        _drain_until(ws_b, ["hand_started"])
+        # Initial pot = 15 (SB + BB)
+        assert a_start["state"]["pot_total"] == 15
+
+        # Drain everyone's private state so the queues are at the action.
+        _drain_until(ws_a, ["private"])
+        _drain_until(ws_b, ["private"])
+
+        # Alice raises to 30. New pot = 30 (alice) + 10 (bob's BB) = 40.
+        ws_a.send_json({"type": "action", "action": "raise", "amount": 30})
+        a_update = _drain_until(ws_a, ["state_update"])
+        assert a_update["state"]["pot_total"] == 40, (
+            f"after alice raise to 30, pot_total should be 40, got "
+            f"{a_update['state']['pot_total']}"
+        )
+
+        # Bob calls. New pot = 60 (both at 30). After call, pre-flop closes
+        # and we move to flop: street_committed resets but total_committed
+        # stays at 30/30, so pot_total still 60.
+        # Drain alice's private update too so we can read bob's update next.
+        _drain_until(ws_a, ["private"])
+        _drain_until(ws_b, ["state_update"])
+        _drain_until(ws_b, ["private"])
+
+        ws_b.send_json({"type": "action", "action": "call"})
+        # After the call, the loop broadcasts state_update (still pre-flop or
+        # already moved to flop — either way pot_total should be 60).
+        b_update = _drain_until(ws_b, ["state_update"])
+        assert b_update["state"]["pot_total"] == 60, (
+            f"after bob calls 30, pot_total should be 60, got "
+            f"{b_update['state']['pot_total']}"
+        )

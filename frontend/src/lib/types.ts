@@ -28,6 +28,7 @@ export interface PublicPlayer {
   stack: number;
   status: PlayerStatus;
   street_committed: number;
+  total_committed: number;
   last_action: ActionType | null;
   hole: string[] | null;
 }
@@ -42,6 +43,7 @@ export interface PublicState {
   phase: Phase;
   board: string[];
   pots: PublicPot[];
+  pot_total: number;
   current_bet: number;
   min_raise: number;
   to_act: string[];

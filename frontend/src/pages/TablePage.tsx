@@ -156,7 +156,7 @@ function SeatPicker({
     >
       <div>Pick a seat to sit down (buy-in {DEFAULT_BUY_IN}):</div>
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-        {Array.from({ length: maxSeats }, (_, i) => {
+        {Array.from({ length: maxSeats }).map((_, i) => {
           const occupied = seats[i] != null;
           return (
             <button

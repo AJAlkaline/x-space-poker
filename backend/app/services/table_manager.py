@@ -310,6 +310,15 @@ def _next_button(rt: TableRuntime) -> int:
 
 
 def _public_view(state: GameState, reveal: bool = False) -> dict:
+    # The "displayed pot" includes chips committed this street that haven't yet
+    # been folded into a Pot object. compute_pots only runs at hand resolution,
+    # so during a betting round the pots list can be empty even with chips on the
+    # table. sum(player.total_committed) is the canonical running pot total at
+    # any moment (and it already includes the current street since apply_action
+    # updates total_committed atomically with street_committed).
+    pot_total = sum(
+        p.total_committed for p in state.players if p is not None
+    )
     return {
         "hand_id": state.hand_id,
         "phase": state.phase.value,
@@ -318,6 +327,7 @@ def _public_view(state: GameState, reveal: bool = False) -> dict:
             {"amount": p.amount, "eligible": list(p.eligible_players)}
             for p in state.pots
         ],
+        "pot_total": pot_total,
         "current_bet": state.betting.current_bet,
         "min_raise": state.betting.min_raise,
         "to_act": list(state.betting.to_act),
@@ -331,6 +341,7 @@ def _public_view(state: GameState, reveal: bool = False) -> dict:
                 "stack": p.stack,
                 "status": p.status.value,
                 "street_committed": p.street_committed,
+                "total_committed": p.total_committed,
                 "last_action": p.last_action.value if p.last_action else None,
                 "hole": (
                     [str(c) for c in p.hole]

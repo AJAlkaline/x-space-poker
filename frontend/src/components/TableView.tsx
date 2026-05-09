@@ -43,7 +43,7 @@ export function TableView({ publicState, privateState, seats }: TableViewProps) 
     );
   }
 
-  const totalPot = publicState.pots.reduce((s, p) => s + p.amount, 0);
+  const totalPot = publicState.pot_total;
 
   return (
     <div
@@ -137,19 +137,49 @@ export function TableView({ publicState, privateState, seats }: TableViewProps) 
                 borderRadius: 8,
                 background: p.status === "folded" ? "#0e1f1a" : "#1a3a30",
                 opacity: p.status === "folded" ? 0.5 : 1,
+                position: "relative",
               }}
             >
               <div style={{ display: "flex", justifyContent: "space-between" }}>
                 <span style={{ fontWeight: 600 }}>{p.id}</span>
-                {isButton && <span style={{ fontSize: "0.75rem" }}>D</span>}
+                {isButton && (
+                  <span
+                    style={{
+                      fontSize: "0.7rem",
+                      background: "#f5c542",
+                      color: "#000",
+                      padding: "0.1rem 0.4rem",
+                      borderRadius: 999,
+                      fontWeight: 700,
+                    }}
+                  >
+                    D
+                  </span>
+                )}
               </div>
               <div style={{ fontSize: "0.85rem", opacity: 0.8 }}>
                 Stack: {p.stack}
-                {p.street_committed > 0 && ` · bet ${p.street_committed}`}
               </div>
               <div style={{ fontSize: "0.75rem", opacity: 0.6 }}>
                 {p.status} {p.last_action ? `· ${p.last_action}` : ""}
               </div>
+              {/* Chips in front of player on this street */}
+              {p.street_committed > 0 && (
+                <div
+                  style={{
+                    marginTop: "0.5rem",
+                    background: "#f5c542",
+                    color: "#000",
+                    fontWeight: 700,
+                    fontSize: "0.85rem",
+                    padding: "0.15rem 0.5rem",
+                    borderRadius: 999,
+                    display: "inline-block",
+                  }}
+                >
+                  → {p.street_committed}
+                </div>
+              )}
               {/* Showdown reveal */}
               {p.hole && (
                 <div style={{ display: "flex", gap: "0.25rem", marginTop: "0.4rem" }}>

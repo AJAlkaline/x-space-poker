@@ -44,7 +44,7 @@ export function ActionBar({ publicState, privateState, onAction }: ActionBarProp
   const maxSize = sizer?.max_amount ?? 0;
   const clampedAmount = Math.min(maxSize, Math.max(minSize, betAmount || minSize));
 
-  const pot = publicState.pots.reduce((s, p) => s + p.amount, 0);
+  const pot = publicState.pot_total;
   const presets = [
     { label: "½ pot", amount: Math.round(pot * 0.5) },
     { label: "¾ pot", amount: Math.round(pot * 0.75) },

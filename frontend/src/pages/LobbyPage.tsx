@@ -64,7 +64,18 @@ export function LobbyPage() {
           <button type="submit" disabled={joinCode.length < 4}>
             Join
           </button>
+          <button
+            type="button"
+            disabled={joinCode.length < 4}
+            onClick={() => navigate(`/spectate/${joinCode.trim().toUpperCase()}`)}
+            title="Watch without joining a seat"
+          >
+            Watch
+          </button>
         </form>
+        <div style={{ fontSize: "0.85rem", opacity: 0.6, marginTop: "0.4rem" }}>
+          Join to play; Watch to spectate without taking a seat.
+        </div>
       </section>
 
       <section>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ActionType, PrivateState, PublicState } from "../lib/types";
+import { ActionTimer } from "./ActionTimer";
 
 interface ActionBarProps {
   publicState: PublicState | null;
@@ -62,6 +63,14 @@ export function ActionBar({ publicState, privateState, onAction }: ActionBarProp
         gap: "0.75rem",
       }}
     >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: "0.85rem", opacity: 0.85 }}>Your action</span>
+        <ActionTimer
+          baseDeadlineUnixMs={privateState?.base_deadline_unix_ms ?? null}
+          bankDeadlineUnixMs={privateState?.bank_deadline_unix_ms ?? null}
+          actionTimerSeconds={privateState?.action_timer_seconds ?? null}
+        />
+      </div>
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         {fold && <button onClick={() => onAction("fold")}>Fold</button>}
         {check && <button onClick={() => onAction("check")}>Check</button>}

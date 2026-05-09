@@ -23,6 +23,7 @@ export function TablePage() {
   const [seats, setSeats] = useState<(SeatInfo | null)[]>(
     Array.from({ length: MAX_SEATS }, () => null)
   );
+  const [viewerCount, setViewerCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [joinPending, setJoinPending] = useState(false);
 
@@ -38,11 +39,18 @@ export function TablePage() {
         setPublicState(msg.state);
         setError(null);
         break;
+      case "hand_aborted":
+        setPublicState(null);
+        setPrivateState(null);
+        break;
       case "private":
         setPrivateState(msg.state);
         break;
       case "seats":
         setSeats(msg.seats);
+        break;
+      case "viewer_count":
+        setViewerCount(msg.count);
         break;
       case "illegal_action":
       case "table_error":
@@ -100,7 +108,24 @@ export function TablePage() {
         }}
       >
         <h2 style={{ margin: 0 }}>Table {code}</h2>
-        <span style={{ fontSize: "0.85rem", opacity: 0.7 }}>{status}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          {viewerCount > 0 && (
+            <span
+              style={{
+                fontSize: "0.85rem",
+                opacity: 0.85,
+                padding: "0.2rem 0.6rem",
+                background: "#1f2228",
+                border: "1px solid #2a2e36",
+                borderRadius: 999,
+              }}
+              title="Total viewers (players + spectators)"
+            >
+              👁 {viewerCount}
+            </span>
+          )}
+          <span style={{ fontSize: "0.85rem", opacity: 0.7 }}>{status}</span>
+        </div>
       </div>
 
       {error && (

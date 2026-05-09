@@ -127,6 +127,8 @@ export function TableView({ publicState, seats }: TableViewProps) {
           }
           const isToAct = publicState.to_act[0] === p.id;
           const isButton = publicState.button === p.seat;
+          const seatInfo = seats[p.seat];
+          const isDisconnected = seatInfo?.disconnected ?? false;
           return (
             <div
               key={i}
@@ -139,8 +141,22 @@ export function TableView({ publicState, seats }: TableViewProps) {
                 position: "relative",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ fontWeight: 600 }}>{p.id}</span>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontWeight: 600 }}>
+                  {p.id}
+                  {isDisconnected && (
+                    <span
+                      style={{
+                        marginLeft: "0.4rem",
+                        fontSize: "0.7rem",
+                        color: "#e57b3a",
+                        fontWeight: 500,
+                      }}
+                    >
+                      • disconnected
+                    </span>
+                  )}
+                </span>
                 {isButton && (
                   <span
                     style={{

@@ -63,21 +63,37 @@ export interface PrivateState {
   hole: [string, string] | null;
   your_turn: boolean;
   legal_actions: LegalAction[];
+  base_deadline_unix_ms: number | null;
+  bank_deadline_unix_ms: number | null;
+  timebank_remaining_ms: number | null;
+  action_timer_seconds: number | null;
 }
 
 export interface SeatInfo {
   seat: number;
   user_id: string;
   stack: number;
+  sitting_out: boolean;
+  disconnected: boolean;
 }
 
 export type ServerMessage =
   | { type: "hand_started"; state: PublicState }
-  | { type: "state_update"; state: PublicState }
+  | { type: "state_update"; state: PublicState; action?: ActionInfo }
   | { type: "hand_complete"; state: PublicState }
+  | { type: "hand_aborted"; hand_id: string; refunds: Record<string, number> }
   | { type: "private"; state: PrivateState }
   | { type: "seats"; seats: (SeatInfo | null)[] }
+  | { type: "viewer_count"; count: number }
   | { type: "illegal_action"; error: string }
   | { type: "table_error"; error: string };
+
+export interface ActionInfo {
+  sequence: number;
+  player_id: string;
+  action_type: ActionType;
+  amount: number;
+  auto: boolean;
+}
 
 export type ClientMessage = { type: "action"; action: ActionType; amount?: number };

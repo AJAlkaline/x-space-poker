@@ -200,8 +200,7 @@ def test_seats_broadcast_after_each_join(client: TestClient) -> None:
             params={"as": "alice"},
             json={"code": code, "seat": 0, "buy_in": 1000},
         )
-        msg = ws_a.receive_json()
-        assert msg["type"] == "seats", f"expected seats, got {msg['type']}"
+        msg = _drain_until(ws_a, ["seats"])
         assert msg["seats"][0] is not None and msg["seats"][0]["user_id"] == "alice"
 
         # Bob joins; both sockets should receive a seats update reflecting
@@ -213,15 +212,13 @@ def test_seats_broadcast_after_each_join(client: TestClient) -> None:
         )
 
         # On bob's socket, drain seats messages until both players are present.
-        # Bob will see one seats message reflecting alice-only (from when alice
-        # joined), then a second reflecting both, then hand_started.
-        for _ in range(5):
-            bob_seats = ws_b.receive_json()
-            if bob_seats["type"] != "seats":
-                raise AssertionError(
-                    f"expected seats, got {bob_seats['type']} (queue out of order)"
-                )
-            ids = {s["user_id"] for s in bob_seats["seats"] if s}
+        # Skip viewer_count events that arrive in between.
+        for _ in range(20):
+            bob_msg = ws_b.receive_json()
+            if bob_msg["type"] != "seats":
+                # viewer_count, etc. — not what we're looking for
+                continue
+            ids = {s["user_id"] for s in bob_msg["seats"] if s}
             if ids == {"alice", "bob"}:
                 break
         else:

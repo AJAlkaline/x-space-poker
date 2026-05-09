@@ -64,6 +64,15 @@ cd backend
 pytest
 ```
 
+### Local ports
+
+The docker-compose file maps Postgres to host port **15432** and Redis to host port **16379** (the containers internally still use 5432 and 6379). These non-standard host ports avoid two common Windows + WSL2 issues:
+
+- Local Postgres installs frequently occupy 5432.
+- Hyper-V/WSL2 reserves dynamic port ranges that often cover the 6000-7000 area, sometimes more. You can check yours with `netsh interface ipv4 show excludedportrange protocol=tcp` from PowerShell.
+
+15432 and 16379 are well outside any reservation range I've seen reported. If they ever conflict, change both `infra/docker/docker-compose.yml` (host side of the mapping) and `backend/.env` together. CI and cloud deployments use the standard internal ports — only local-host ports differ.
+
 ## Legal posture
 
 Play money only. No player-to-player transfers. No cash-out. The currency abstraction (`accounts.currency_type`) is structured so a future regulated real-money or crypto variant can be added behind the same engine, but **none of that code exists today** and adding it without proper licensing is not legal. See `docs/legal.md`.

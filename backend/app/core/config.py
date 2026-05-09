@@ -22,8 +22,11 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
     # Database
-    database_url: str = "postgresql+asyncpg://poker:poker@localhost:5432/poker"
-    redis_url: str = "redis://localhost:6379/0"
+    # Defaults match infra/docker/docker-compose.yml host port mappings.
+    # Production overrides via env vars hit cloud-internal addresses on
+    # the standard ports (5432/6379).
+    database_url: str = "postgresql+asyncpg://poker:poker@localhost:15432/poker"
+    redis_url: str = "redis://localhost:16379/0"
 
     # Auth
     jwt_secret: str = "dev-secret-change-me"

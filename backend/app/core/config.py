@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     max_tables_per_host: int = 5
     max_concurrent_tables: int = 100
 
+    # Feature flags
+    persistence_enabled: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

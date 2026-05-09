@@ -131,14 +131,18 @@ class TableManager:
     # ---- Lifecycle ----
 
     async def create_table(
-        self, table_id: str, small_blind: int, big_blind: int, max_seats: int = 9,
+        self, table_id: str, small_blind: int, big_blind: int,
+        max_seats: int = 9, code: str | None = None,
     ) -> TableRuntime:
-        for _ in range(10):
-            code = generate_table_code()
-            if code not in self._codes:
-                break
-        else:
-            raise RuntimeError("could not generate unique table code")
+        if code is None:
+            for _ in range(10):
+                code = generate_table_code()
+                if code not in self._codes:
+                    break
+            else:
+                raise RuntimeError("could not generate unique table code")
+        elif code in self._codes:
+            raise RuntimeError(f"code {code} already in use")
 
         rt = TableRuntime(
             table_id=table_id, code=code,
@@ -152,6 +156,17 @@ class TableManager:
         self._tasks[table_id] = asyncio.create_task(
             self._run_table(rt), name=f"table-{code}",
         )
+        # If persistence is enabled, also spawn a consumer that writes hand
+        # history + ledger entries from the event stream.
+        from app.core.config import get_settings
+        if get_settings().persistence_enabled:
+            from app.services.persistence_consumer import run_persistence_consumer
+            self._tasks[f"{table_id}:persistence"] = asyncio.create_task(
+                run_persistence_consumer(
+                    rt.bus, f"persistence:{table_id}", rt.closed,
+                ),
+                name=f"persistence-{code}",
+            )
         return rt
 
     async def close_table(self, table_id: str) -> None:
@@ -160,11 +175,12 @@ class TableManager:
             return
         rt.closed.set()
         rt.seats_changed.set()
-        task = self._tasks.pop(table_id, None)
-        if task:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        for key in (table_id, f"{table_id}:persistence"):
+            task = self._tasks.pop(key, None)
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         self._codes.pop(rt.code, None)
         self._tables.pop(table_id, None)
 

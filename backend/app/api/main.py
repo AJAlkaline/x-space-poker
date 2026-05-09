@@ -12,7 +12,14 @@ from app.core.config import get_settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: initialize DB pool, narrator, etc.
+    # Startup: rehydrate active tables from DB if persistence is enabled.
+    from app.services.recovery import recover_tables
+    try:
+        await recover_tables()
+    except Exception:
+        # Don't block startup on recovery failure — operator can fix and restart.
+        import logging
+        logging.getLogger(__name__).exception("recovery failed at startup")
     yield
     # Shutdown: close clients
 

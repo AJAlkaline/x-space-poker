@@ -106,7 +106,15 @@ For multi-process deployments, set `PERSISTENCE_ENABLED=true`. On startup the ap
 
 ### Sign-in UX
 
+The sign-in screen reads `/auth/config` to decide what to show:
+
+- **`AUTH_MODE=x_oauth`** — only the "Sign in with X" button. Real OAuth required.
+- **`AUTH_MODE=fake`** — only a "Continue as &lt;handle&gt;" form. No OAuth attempted; pick any handle and you're in. The server issues a session cookie via `POST /auth/fake-login`.
+- **`AUTH_MODE=both`** (default) — both options shown when X credentials are configured. If `X_CLIENT_ID`/`X_CLIENT_SECRET` are unset, only the dev form shows. This is the "I just want to run the app locally without setting up X OAuth" path.
+
 Clicking "Sign in with X" preserves the current page: if you're at `/table/ABC234`, you land back at `/table/ABC234` after authenticating. The frontend passes `?next=<path>` to `/auth/login`; the server stashes that path with the PKCE state and honors it on `/auth/callback`. Only same-origin paths are accepted (`//evil.com`-style absolute URLs are rejected as a defense against open-redirect attacks).
+
+The fake-login path is only reachable when `AUTH_MODE` allows it. In `x_oauth` mode the `/auth/fake-login` endpoint returns 404 even if someone calls it directly — defense in depth so a misconfigured prod deploy can't accidentally accept arbitrary handles.
 
 ## Legal posture
 

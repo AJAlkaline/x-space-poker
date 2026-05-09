@@ -26,6 +26,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.core.security import (
@@ -214,9 +215,16 @@ async def callback(
     # from elsewhere.
     redirect_target = _safe_next_url(x_user.next_url) or "/"
 
-    # Set cookie + redirect. SameSite=Lax + httpOnly + Secure (in prod).
-    settings = get_settings()
     response = RedirectResponse(url=redirect_target, status_code=302)
+    _set_session_cookie(response, token)
+    return response
+
+
+def _set_session_cookie(response, token: str) -> None:
+    """Set the session cookie on a response. Centralized so the cookie
+    flags stay consistent across login paths (real OAuth, fake login, and
+    any future ones)."""
+    settings = get_settings()
     response.set_cookie(
         key="session",
         value=token,
@@ -226,11 +234,63 @@ async def callback(
         samesite="lax",
         path="/",
     )
-    return response
 
 
 @router.post("/logout")
 async def logout() -> JSONResponse:
     response = JSONResponse({"ok": True})
     response.delete_cookie("session", path="/")
+    return response
+
+
+@router.get("/config")
+async def auth_config() -> dict:
+    """Tell the client which auth options are available.
+
+    The frontend calls this on mount to decide whether to render the
+    "Sign in with X" button, the "Continue as <handle>" form, or both.
+    """
+    settings = get_settings()
+    return {
+        "auth_mode": settings.auth_mode,
+        "oauth_available": bool(
+            settings.x_client_id and settings.x_client_secret,
+        ),
+        "fake_auth_enabled": settings.auth_mode in ("fake", "both"),
+    }
+
+
+class FakeLoginRequest(BaseModel):
+    handle: str = Field(min_length=2, max_length=20)
+
+
+@router.post("/fake-login")
+async def fake_login(req: FakeLoginRequest) -> JSONResponse:
+    """Dev-only: take a handle and issue a session cookie for it.
+
+    Gated by `auth_mode in ('fake', 'both')` — refuses in production
+    (`auth_mode='x_oauth'`) so a misconfigured deploy can't accidentally
+    accept arbitrary handles.
+    """
+    settings = get_settings()
+    if settings.auth_mode not in ("fake", "both"):
+        raise HTTPException(404, "fake login disabled")
+    if not _HANDLE_RE.match(req.handle):
+        raise HTTPException(400, "invalid handle (2-20 chars, alphanumeric + _)")
+
+    # The handle becomes the player_id. In persistence mode, also provision
+    # a User+Account row so /auth/me and ledger operations work consistently.
+    user_id = req.handle
+    if settings.persistence_enabled:
+        from app.db.session import get_session
+        from app.services import persistence
+        async with get_session() as s:
+            account = await persistence.ensure_account_for_handle(s, req.handle)
+            user_id = str(account.user_id)
+
+    token = issue_session_token(SessionClaims(
+        user_id=user_id, handle=req.handle, x_user_id=f"fake:{req.handle}",
+    ))
+    response = JSONResponse({"player_id": req.handle})
+    _set_session_cookie(response, token)
     return response

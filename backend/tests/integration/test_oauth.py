@@ -327,3 +327,88 @@ def test_login_without_next_redirects_to_root(client: TestClient) -> None:
         )
     assert res.status_code == 302
     assert res.headers["location"] == "/"
+
+
+# ---------------------------------------------------------------------------
+# /auth/config and /auth/fake-login (the dev/fake-auth shortcut)
+# ---------------------------------------------------------------------------
+
+def test_auth_config_reports_oauth_available_when_credentials_set(
+    client: TestClient,
+) -> None:
+    res = client.get("/auth/config")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["oauth_available"] is True
+    assert body["fake_auth_enabled"] is True  # auth_mode=both by default in fixture
+    assert body["auth_mode"] == "both"
+
+
+def test_auth_config_reports_oauth_unavailable_without_client_id(
+    client: TestClient, monkeypatch,
+) -> None:
+    monkeypatch.setenv("X_CLIENT_ID", "")
+    get_settings.cache_clear()
+    res = client.get("/auth/config")
+    assert res.status_code == 200
+    assert res.json()["oauth_available"] is False
+    # Fake auth is still available because auth_mode=both.
+    assert res.json()["fake_auth_enabled"] is True
+
+
+def test_auth_config_in_strict_mode_disables_fake(
+    client: TestClient, monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTH_MODE", "x_oauth")
+    get_settings.cache_clear()
+    res = client.get("/auth/config")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["fake_auth_enabled"] is False
+    assert body["auth_mode"] == "x_oauth"
+
+
+def test_fake_login_sets_session_cookie_and_authenticates(
+    client: TestClient,
+) -> None:
+    res = client.post("/auth/fake-login", json={"handle": "alice"})
+    assert res.status_code == 200, res.text
+    assert res.json()["player_id"] == "alice"
+    set_cookie = res.headers.get("set-cookie", "")
+    assert "session=" in set_cookie
+
+    # Subsequent /auth/me uses the cookie automatically.
+    res = client.get("/auth/me")
+    assert res.status_code == 200
+    assert res.json()["player_id"] == "alice"
+
+
+def test_fake_login_rejects_invalid_handle(client: TestClient) -> None:
+    res = client.post("/auth/fake-login", json={"handle": "a"})  # too short
+    assert res.status_code == 422  # pydantic validation
+    res = client.post("/auth/fake-login", json={"handle": "has spaces"})
+    assert res.status_code == 400
+
+
+def test_fake_login_disabled_in_strict_oauth_mode(
+    client: TestClient, monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTH_MODE", "x_oauth")
+    get_settings.cache_clear()
+    res = client.post("/auth/fake-login", json={"handle": "alice"})
+    assert res.status_code == 404  # the endpoint pretends not to exist
+
+
+def test_fake_login_works_when_oauth_not_configured(
+    client: TestClient, monkeypatch,
+) -> None:
+    """The whole point: when OAuth isn't configured, fake-login still works
+    (assuming auth_mode allows it)."""
+    monkeypatch.setenv("X_CLIENT_ID", "")
+    monkeypatch.setenv("X_CLIENT_SECRET", "")
+    get_settings.cache_clear()
+    res = client.post("/auth/fake-login", json={"handle": "alice"})
+    assert res.status_code == 200
+    res = client.get("/auth/me")
+    assert res.status_code == 200
+    assert res.json()["player_id"] == "alice"

@@ -10,6 +10,7 @@ import type {
 } from "../lib/types";
 import { TableView } from "../components/TableView";
 import { ActionBar } from "../components/ActionBar";
+import { HoleCards } from "../components/HoleCards";
 
 const MAX_SEATS = 9;
 const DEFAULT_BUY_IN = 1000;
@@ -56,9 +57,13 @@ export function TablePage() {
     onMessage: handleMessage,
   });
 
-  // Detect whether I'm seated by inspecting the latest seats snapshot.
-  const mySeat = seats.findIndex((s) => s != null && s.user_id === handle);
-  const seated = mySeat >= 0;
+  // Determine if I'm seated. Check the seats snapshot first; fall back to the
+  // current public state's player list in case the seats message hasn't arrived
+  // yet but a hand has already started with me in it.
+  const inSeats = seats.findIndex((s) => s != null && s.user_id === handle) >= 0;
+  const inPublic =
+    publicState?.players.some((p) => p != null && p.id === handle) ?? false;
+  const seated = inSeats || inPublic;
 
   // Clear private state if I'm not seated (e.g. after busting out).
   useEffect(() => {
@@ -120,7 +125,9 @@ export function TablePage() {
         />
       )}
 
-      <TableView publicState={publicState} privateState={privateState} seats={seats} />
+      <TableView publicState={publicState} seats={seats} />
+
+      {seated && <HoleCards privateState={privateState} />}
 
       {seated && (
         <ActionBar

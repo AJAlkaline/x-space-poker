@@ -1,12 +1,11 @@
-import type { PrivateState, PublicState, SeatInfo } from "../lib/types";
+import type { PublicState, SeatInfo } from "../lib/types";
 
 interface TableViewProps {
   publicState: PublicState | null;
-  privateState: PrivateState | null;
   seats: (SeatInfo | null)[];
 }
 
-export function TableView({ publicState, privateState, seats }: TableViewProps) {
+export function TableView({ publicState, seats }: TableViewProps) {
   // No hand yet: show seats from the seats snapshot.
   if (!publicState) {
     const occupied = seats.filter((s) => s != null);
@@ -192,28 +191,11 @@ export function TableView({ publicState, privateState, seats }: TableViewProps) 
           );
         })}
       </div>
-
-      {/* Hole cards (private) */}
-      {privateState?.hole && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: 16,
-            left: 16,
-            display: "flex",
-            gap: "0.25rem",
-          }}
-        >
-          {privateState.hole.map((c, i) => (
-            <CardView key={i} card={c} />
-          ))}
-        </div>
-      )}
     </div>
   );
 }
 
-function CardView({ card, small = false }: { card: string; small?: boolean }) {
+export function CardView({ card, small = false }: { card: string; small?: boolean }) {
   const rank = card[0];
   const suit = card[1];
   const isRed = suit === "h" || suit === "d";

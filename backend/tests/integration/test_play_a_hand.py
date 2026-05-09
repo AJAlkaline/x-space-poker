@@ -173,3 +173,60 @@ def test_pot_updates_through_betting_round(client: TestClient) -> None:
             f"after bob calls 30, pot_total should be 60, got "
             f"{b_update['state']['pot_total']}"
         )
+
+
+def test_seats_broadcast_after_each_join(client: TestClient) -> None:
+    """Regression: every player must receive a `seats` snapshot reflecting
+    their seating before any `hand_started` event arrives. Without this, the
+    UI keeps showing the seat picker after a player has actually sat down."""
+    res = client.post(
+        "/tables",
+        params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+
+    with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+         client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+
+        # Initial snapshots (empty).
+        _drain_until(ws_a, ["seats"])
+        _drain_until(ws_b, ["seats"])
+
+        # Alice joins; her socket must receive a seats update with her in it
+        # BEFORE any hand_started arrives.
+        client.post(
+            "/tables/join",
+            params={"as": "alice"},
+            json={"code": code, "seat": 0, "buy_in": 1000},
+        )
+        msg = ws_a.receive_json()
+        assert msg["type"] == "seats", f"expected seats, got {msg['type']}"
+        assert msg["seats"][0] is not None and msg["seats"][0]["user_id"] == "alice"
+
+        # Bob joins; both sockets should receive a seats update reflecting
+        # both players seated, BEFORE hand_started.
+        client.post(
+            "/tables/join",
+            params={"as": "bob"},
+            json={"code": code, "seat": 1, "buy_in": 1000},
+        )
+
+        # On bob's socket, drain seats messages until both players are present.
+        # Bob will see one seats message reflecting alice-only (from when alice
+        # joined), then a second reflecting both, then hand_started.
+        for _ in range(5):
+            bob_seats = ws_b.receive_json()
+            if bob_seats["type"] != "seats":
+                raise AssertionError(
+                    f"expected seats, got {bob_seats['type']} (queue out of order)"
+                )
+            ids = {s["user_id"] for s in bob_seats["seats"] if s}
+            if ids == {"alice", "bob"}:
+                break
+        else:
+            raise AssertionError("never received seats with both players")
+
+        # Now hand_started should be next.
+        bob_started = _drain_until(ws_b, ["hand_started"])
+        assert bob_started["state"]["pot_total"] == 15

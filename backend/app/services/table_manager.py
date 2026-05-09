@@ -208,12 +208,27 @@ class TableManager:
                 if len(eligible) < 2:
                     rt.seats_changed.clear()
                     await rt.seats_changed.wait()
+                    # After being woken, broadcast the new seating so spectators
+                    # and newly-seated players see themselves at the table even
+                    # if we don't yet have enough players to deal a hand.
+                    await self._broadcast(rt, {
+                        "type": "seats", "seats": _seats_view(rt),
+                    })
                     continue
 
                 if rt.button_seat == -1:
                     rt.button_seat = min(rt.seats.keys())
                 else:
                     rt.button_seat = _next_button(rt)
+
+                # Broadcast seats so any newly-seated player sees themselves at
+                # the table before the hand_started event arrives. (Without this,
+                # a player who joins as the 2nd seat would jump straight from
+                # "not seated" to "in a hand" and the UI wouldn't have a chance
+                # to update its seated/spectator state.)
+                await self._broadcast(rt, {
+                    "type": "seats", "seats": _seats_view(rt),
+                })
 
                 rt.current_deck = Deck.random()
                 rt.current_state = deal_hand(

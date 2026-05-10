@@ -192,38 +192,52 @@ interface HandSummary {
   started_at: string | null;
 }
 
+type RecentHandsState =
+  | { status: "idle" }                            // never fetched
+  | { status: "loading" }
+  | { status: "ok"; hands: HandSummary[] }
+  | { status: "disabled" }                        // backend has persistence off
+  | { status: "error"; message: string };
+
 function RecentHands({ code }: { code: string }) {
-  const [hands, setHands] = useState<HandSummary[] | null>(null);
+  const [state, setState] = useState<RecentHandsState>({ status: "idle" });
   const [open, setOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!code) return;
+    setState({ status: "loading" });
     try {
-      const res = await fetch(`/api/tables/${encodeURIComponent(code)}/hands`, {
-        credentials: "include",
-      });
+      const res = await fetch(
+        `/api/tables/${encodeURIComponent(code)}/hands`,
+        { credentials: "include" },
+      );
       if (res.status === 503) {
-        // Persistence not enabled — fail silently, don't show the section.
-        setHands([]);
+        setState({ status: "disabled" });
         return;
       }
       if (!res.ok) {
-        throw new Error(`${res.status}: ${await res.text()}`);
+        const text = await res.text();
+        setState({
+          status: "error",
+          message: `${res.status}: ${text || res.statusText}`,
+        });
+        return;
       }
       const data = (await res.json()) as { hands: HandSummary[] };
-      setHands(data.hands);
-      setError(null);
+      setState({ status: "ok", hands: data.hands });
     } catch (e) {
-      setError((e as Error).message);
+      setState({ status: "error", message: (e as Error).message });
     }
   }, [code]);
 
   useEffect(() => {
-    if (open && hands === null) refresh();
-  }, [open, hands, refresh]);
+    if (open && state.status === "idle") refresh();
+  }, [open, state.status, refresh]);
 
   if (!code) return null;
+
+  const handCount =
+    state.status === "ok" ? state.hands.length : null;
 
   return (
     <details
@@ -238,31 +252,44 @@ function RecentHands({ code }: { code: string }) {
     >
       <summary style={{ cursor: "pointer", userSelect: "none" }}>
         Recent hands at this table
-        {hands && hands.length > 0 && (
+        {handCount !== null && handCount > 0 && (
           <span style={{ marginLeft: "0.5rem", opacity: 0.5 }}>
-            ({hands.length})
+            ({handCount})
           </span>
         )}
       </summary>
       <div style={{ marginTop: "0.5rem" }}>
-        {error && (
-          <div style={{ color: "#e05050", fontSize: "0.8rem" }}>{error}</div>
-        )}
-        {hands === null && !error && (
+        {state.status === "loading" && (
           <div style={{ opacity: 0.6 }}>Loading…</div>
         )}
-        {hands && hands.length === 0 && (
+        {state.status === "error" && (
+          <div style={{ color: "#e05050", fontSize: "0.8rem" }}>
+            {state.message}
+          </div>
+        )}
+        {state.status === "disabled" && (
+          <div style={{ opacity: 0.7, fontSize: "0.8rem" }}>
+            Hand history is unavailable: persistence is disabled on the server.
+            Set <code>PERSISTENCE_ENABLED=true</code> to enable it.
+          </div>
+        )}
+        {state.status === "ok" && state.hands.length === 0 && (
           <div style={{ opacity: 0.6, fontStyle: "italic" }}>
             No completed hands yet.
           </div>
         )}
-        {hands && hands.length > 0 && (
-          <ul style={{ margin: 0, paddingLeft: "1.25rem", display: "grid", gap: "0.2rem" }}>
-            {hands.map((h) => (
+        {state.status === "ok" && state.hands.length > 0 && (
+          <ul
+            style={{
+              margin: 0,
+              paddingLeft: "1.25rem",
+              display: "grid",
+              gap: "0.2rem",
+            }}
+          >
+            {state.hands.map((h) => (
               <li key={h.hand_id}>
-                <Link to={`/replay/${h.hand_id}`}>
-                  Hand #{h.hand_number}
-                </Link>
+                <Link to={`/replay/${h.hand_id}`}>Hand #{h.hand_number}</Link>
                 {h.started_at && (
                   <span style={{ opacity: 0.5, marginLeft: "0.5rem" }}>
                     {formatTimestamp(h.started_at)}
@@ -274,13 +301,14 @@ function RecentHands({ code }: { code: string }) {
         )}
         <button
           onClick={refresh}
+          disabled={state.status === "loading"}
           style={{
             marginTop: "0.5rem",
             fontSize: "0.75rem",
             padding: "0.2rem 0.5rem",
           }}
         >
-          Refresh
+          {state.status === "loading" ? "Loading…" : "Refresh"}
         </button>
       </div>
     </details>

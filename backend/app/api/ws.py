@@ -24,7 +24,7 @@ from app.core.config import get_settings
 from app.core.security import verify_session_token
 from app.engine import Action, ActionType
 from app.services.table_manager import get_manager
-from app.services.wire import private_event_to_wire, public_event_to_wire
+from app.services.wire import event_to_wire, public_event_to_wire
 
 router = APIRouter()
 
@@ -68,17 +68,14 @@ async def player_socket(
         return
 
     await websocket.accept()
-    public_q, private_q = mgr.subscribe_player(rt.table_id, handle)
+    queue = mgr.subscribe_player(rt.table_id, handle)
 
-    async def pump_public() -> None:
+    async def pump_outbound() -> None:
+        """Drain the player's queue. Order is preserved between public and
+        private events because they share a single queue on the bus."""
         while True:
-            event = await public_q.get()
-            await websocket.send_json(public_event_to_wire(event))
-
-    async def pump_private() -> None:
-        while True:
-            event = await private_q.get()
-            await websocket.send_json(private_event_to_wire(event))
+            event = await queue.get()
+            await websocket.send_json(event_to_wire(event))
 
     async def pump_inbound() -> None:
         while True:
@@ -101,8 +98,7 @@ async def player_socket(
                 )
 
     tasks = [
-        asyncio.create_task(pump_public()),
-        asyncio.create_task(pump_private()),
+        asyncio.create_task(pump_outbound()),
         asyncio.create_task(pump_inbound()),
     ]
     try:

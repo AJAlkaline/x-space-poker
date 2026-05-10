@@ -8,9 +8,15 @@ import type {
   SeatInfo,
   ServerMessage,
 } from "../lib/types";
+import {
+  applyMessage,
+  emptyLogState,
+  type EventLogState,
+} from "../lib/eventLog";
 import { TableView } from "../components/TableView";
 import { ActionBar } from "../components/ActionBar";
 import { HoleCards } from "../components/HoleCards";
+import { EventLog } from "../components/EventLog";
 
 const MAX_SEATS = 9;
 const DEFAULT_BUY_IN = 1000;
@@ -26,38 +32,47 @@ export function TablePage() {
   const [viewerCount, setViewerCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [joinPending, setJoinPending] = useState(false);
+  const [logState, setLogState] = useState<EventLogState>(emptyLogState);
 
-  const handleMessage = useCallback((msg: ServerMessage) => {
-    switch (msg.type) {
-      case "hand_started":
-        setPublicState(msg.state);
-        setPrivateState(null);
-        setError(null);
-        break;
-      case "state_update":
-      case "hand_complete":
-        setPublicState(msg.state);
-        setError(null);
-        break;
-      case "hand_aborted":
-        setPublicState(null);
-        setPrivateState(null);
-        break;
-      case "private":
-        setPrivateState(msg.state);
-        break;
-      case "seats":
-        setSeats(msg.seats);
-        break;
-      case "viewer_count":
-        setViewerCount(msg.count);
-        break;
-      case "illegal_action":
-      case "table_error":
-        setError(msg.error);
-        break;
-    }
-  }, []);
+  const handleMessage = useCallback(
+    (msg: ServerMessage) => {
+      // Feed every message into the event log builder. The builder itself
+      // is pure; we use the functional setState form so we always get the
+      // latest log state even if multiple messages arrive in quick succession.
+      setLogState((prev) => applyMessage(prev, msg, handle));
+
+      switch (msg.type) {
+        case "hand_started":
+          setPublicState(msg.state);
+          setPrivateState(null);
+          setError(null);
+          break;
+        case "state_update":
+        case "hand_complete":
+          setPublicState(msg.state);
+          setError(null);
+          break;
+        case "hand_aborted":
+          setPublicState(null);
+          setPrivateState(null);
+          break;
+        case "private":
+          setPrivateState(msg.state);
+          break;
+        case "seats":
+          setSeats(msg.seats);
+          break;
+        case "viewer_count":
+          setViewerCount(msg.count);
+          break;
+        case "illegal_action":
+        case "table_error":
+          setError(msg.error);
+          break;
+      }
+    },
+    [handle],
+  );
 
   const { send, status } = useTableSocket({
     code: code ?? "",
@@ -159,9 +174,12 @@ export function TablePage() {
         <ActionBar
           publicState={publicState}
           privateState={privateState}
+          myHandle={handle}
           onAction={(action, amount) => send({ type: "action", action, amount })}
         />
       )}
+
+      <EventLog entries={logState.entries} />
     </div>
   );
 }

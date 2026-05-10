@@ -6,7 +6,13 @@ import type {
   SeatInfo,
   ServerMessage,
 } from "../lib/types";
+import {
+  applyMessage,
+  emptyLogState,
+  type EventLogState,
+} from "../lib/eventLog";
 import { TableView } from "../components/TableView";
+import { EventLog } from "../components/EventLog";
 
 const MAX_SEATS = 9;
 
@@ -22,8 +28,15 @@ export function SpectatePage() {
     Array.from({ length: MAX_SEATS }, () => null)
   );
   const [viewerCount, setViewerCount] = useState(0);
+  const [logState, setLogState] = useState<EventLogState>(emptyLogState);
 
   const handleMessage = useCallback((msg: ServerMessage) => {
+    // Spectators have no `myHandle` for personalized narration —
+    // pass null. The builder won't see private events on this socket
+    // (the spectate endpoint never sends them), so the log is purely
+    // public narration.
+    setLogState((prev) => applyMessage(prev, msg, null));
+
     switch (msg.type) {
       case "hand_started":
       case "state_update":
@@ -83,6 +96,7 @@ export function SpectatePage() {
       </div>
 
       <TableView publicState={publicState} seats={seats} />
+      <EventLog entries={logState.entries} />
     </div>
   );
 }

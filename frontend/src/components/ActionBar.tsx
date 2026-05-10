@@ -5,10 +5,13 @@ import { ActionTimer } from "./ActionTimer";
 interface ActionBarProps {
   publicState: PublicState | null;
   privateState: PrivateState | null;
+  myHandle: string | null;
   onAction: (action: ActionType, amount?: number) => void;
 }
 
-export function ActionBar({ publicState, privateState, onAction }: ActionBarProps) {
+export function ActionBar({
+  publicState, privateState, myHandle, onAction,
+}: ActionBarProps) {
   const legals = privateState?.legal_actions ?? [];
   const yourTurn = privateState?.your_turn ?? false;
   const [betAmount, setBetAmount] = useState<number>(0);
@@ -18,7 +21,16 @@ export function ActionBar({ publicState, privateState, onAction }: ActionBarProp
     if (!yourTurn) setBetAmount(0);
   }, [yourTurn, publicState?.hand_id]);
 
-  if (!publicState || !yourTurn || legals.length === 0) {
+  // Consistency check: if our private state says it's our turn but the public
+  // state's to_act list disagrees, the two snapshots have drifted (e.g. a
+  // private event from before a phase advance is still in our local state
+  // while the public state has already moved on). Hide the action bar in
+  // that case to prevent submitting actions against a stale legal-actions list.
+  const publicToActMatches =
+    publicState?.to_act?.[0] === (myHandle ?? "");
+  const stateConsistent = !yourTurn || publicToActMatches;
+
+  if (!publicState || !yourTurn || legals.length === 0 || !stateConsistent) {
     return (
       <div
         style={{

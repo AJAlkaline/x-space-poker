@@ -62,3 +62,11 @@ def private_event_to_wire(event: PrivateEvent) -> dict:
     if isinstance(event, IllegalActionEvent):
         return {"type": "illegal_action", "error": event.error}
     raise ValueError(f"unknown private event type: {type(event).__name__}")
+
+
+def event_to_wire(event) -> dict:
+    """Dispatch on event kind. Used by the player WebSocket pump where a
+    single queue carries both public and private events."""
+    if isinstance(event, PrivateEvent):
+        return private_event_to_wire(event)
+    return public_event_to_wire(event)

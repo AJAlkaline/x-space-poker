@@ -228,13 +228,13 @@ class TableManager:
 
     def subscribe_player(
         self, table_id: str, player_id: str,
-    ) -> tuple[asyncio.Queue, asyncio.Queue]:
-        """A player gets the public stream + their own private stream.
+    ) -> asyncio.Queue:
+        """A player gets a single ordered queue with public + private events.
 
         On reconnect, clears any disconnect timestamp and re-emits a viewer count
         change so other clients see the player came back.
 
-        Returns (public_queue, private_queue). Caller must call
+        Returns the player's queue. Caller must call
         unsubscribe_player(table_id, player_id) on disconnect.
         """
         rt = self._tables[table_id]
@@ -244,26 +244,24 @@ class TableManager:
         if state is not None:
             state.disconnected_at = None
 
-        public_q = rt.bus.subscribe_public(player_id)
-        private_q = rt.bus.subscribe_private(player_id)
+        queue = rt.bus.subscribe_player(player_id)
 
         # Send the current snapshot to the new subscriber so they have something
         # to render before the next event arrives.
-        self._send_initial_snapshot(rt, player_id, public_q, private_q)
+        self._send_initial_snapshot(rt, player_id, queue)
 
         if was_disconnected:
             # Notify everyone that the seat is no longer disconnected.
             self._publish_seats(rt)
         # Always update viewer count on subscribe.
         self._publish_viewer_count(rt)
-        return public_q, private_q
+        return queue
 
     def unsubscribe_player(self, table_id: str, player_id: str) -> None:
         rt = self._tables.get(table_id)
         if rt is None:
             return
-        rt.bus.unsubscribe_public(player_id)
-        rt.bus.unsubscribe_private(player_id)
+        rt.bus.unsubscribe_player(player_id)
         # If they're seated, mark disconnect timestamp.
         state = rt.seat_state.get(player_id)
         if state is not None and state.disconnected_at is None:
@@ -274,14 +272,12 @@ class TableManager:
     def subscribe_spectator(
         self, table_id: str, viewer_id: str,
     ) -> asyncio.Queue:
-        """A spectator gets the public stream only. Spectators have no private
+        """A spectator gets a public-only queue. Spectators have no private
         channel by construction — hidden information cannot leak to them
-        because the path that would carry it doesn't exist."""
+        because the bus's publish_private API doesn't touch the public-only
+        subscriber list."""
         rt = self._tables[table_id]
         public_q = rt.bus.subscribe_public(viewer_id)
-        # Spectators get the same initial public snapshot players do, minus the
-        # private stream (and minus any hole-card reveals on a complete hand
-        # they joined late — same as players who join late, actually).
         self._send_initial_public_snapshot(rt, public_q)
         self._publish_viewer_count(rt)
         return public_q
@@ -296,10 +292,9 @@ class TableManager:
     # ---- Initial snapshots ----
 
     def _send_initial_snapshot(
-        self, rt: TableRuntime, player_id: str,
-        public_q: asyncio.Queue, private_q: asyncio.Queue,
+        self, rt: TableRuntime, player_id: str, queue: asyncio.Queue,
     ) -> None:
-        """Push current state into a newly-subscribed player's queues."""
+        """Push current state into a newly-subscribed player's combined queue."""
         if rt.current_state is not None:
             if rt.current_state.phase == HandPhase.COMPLETE:
                 event = HandCompletedEvent(
@@ -310,7 +305,7 @@ class TableManager:
                     pot_distributions=[],
                 )
                 with contextlib.suppress(asyncio.QueueFull):
-                    public_q.put_nowait(event)
+                    queue.put_nowait(event)
             else:
                 started = HandStartedEvent(
                     table_id=rt.table_id,
@@ -320,18 +315,18 @@ class TableManager:
                     public_state=_public_view(rt.current_state),
                 )
                 with contextlib.suppress(asyncio.QueueFull):
-                    public_q.put_nowait(started)
+                    queue.put_nowait(started)
                 priv_state = _private_view(rt.current_state, player_id)
                 if priv_state is not None:
                     private_event = PrivateStateEvent(
                         table_id=rt.table_id, player_id=player_id, state=priv_state,
                     )
                     with contextlib.suppress(asyncio.QueueFull):
-                        private_q.put_nowait(private_event)
+                        queue.put_nowait(private_event)
 
         seats_event = SeatsChangedEvent(table_id=rt.table_id, seats=_seats_view(rt))
         with contextlib.suppress(asyncio.QueueFull):
-            public_q.put_nowait(seats_event)
+            queue.put_nowait(seats_event)
 
     def _send_initial_public_snapshot(
         self, rt: TableRuntime, public_q: asyncio.Queue,
@@ -369,7 +364,7 @@ class TableManager:
 
     def _publish_viewer_count(self, rt: TableRuntime) -> None:
         rt.bus.publish_public(ViewerCountChangedEvent(
-            table_id=rt.table_id, count=rt.bus.public_subscriber_count(),
+            table_id=rt.table_id, count=rt.bus.total_subscriber_count(),
         ))
 
     def _publish_private_state(self, rt: TableRuntime, player_id: str) -> None:

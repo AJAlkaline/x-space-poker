@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import type { ActionType, PrivateState, PublicState } from "../lib/types";
+import type {
+  ActionType,
+  LegalAction,
+  PrivateState,
+  PublicState,
+} from "../lib/types";
 import { ActionTimer } from "./ActionTimer";
 
 interface ActionBarProps {
@@ -7,6 +12,67 @@ interface ActionBarProps {
   privateState: PrivateState | null;
   myHandle: string | null;
   onAction: (action: ActionType, amount?: number) => void;
+}
+
+/**
+ * Test for client-side consistency between privateState and publicState.
+ * Returns true if it's safe to render the action bar with these states.
+ *
+ * The states get out of sync briefly between when state_update arrives
+ * (updating publicState) and when the next private arrives (updating
+ * privateState). During that window we want to hide the action bar
+ * rather than risk the user clicking a stale button.
+ *
+ * Two independent invariants the consistent state must satisfy:
+ *
+ * 1. publicState.to_act[0] === myHandle. Server's view of who's acting
+ *    matches our private's `your_turn`.
+ *
+ * 2. The legals match what the engine would compute for the current
+ *    public state:
+ *      - to_call == 0 ↔ CHECK is legal, CALL is not.
+ *      - to_call >  0 ↔ CALL is legal, CHECK is not.
+ *      - current_bet == 0 ↔ BET is legal, RAISE is not.
+ *      - current_bet >  0 ↔ RAISE is legal, BET is not.
+ *
+ *    Note that the BB option pre-flop is a legitimate state where
+ *    current_bet > 0 (= big blind) AND CHECK is legal (because to_call
+ *    is 0 — the BB has already matched their own blind). That's why we
+ *    need to_call separately, not just current_bet.
+ *
+ * Any drift → hide the action bar. The fresh private will arrive in a
+ * few ms and re-enable it with the right buttons.
+ *
+ * Exported so tests can exercise it directly.
+ */
+export function isStateConsistent(
+  publicState: PublicState,
+  legals: LegalAction[],
+  yourTurn: boolean,
+  myHandle: string | null,
+): boolean {
+  if (!yourTurn) return true; // we're not acting, no mismatch can hurt us
+  const me = (myHandle ?? "");
+  if (publicState.to_act[0] !== me) return false;
+
+  // Compute to_call from our own street_committed in the public state.
+  const myPlayer = publicState.players.find((p) => p !== null && p.id === me);
+  if (!myPlayer) return false; // we're somehow not in the public state
+  const toCall = publicState.current_bet - myPlayer.street_committed;
+
+  const hasBet = legals.some((a) => a.action_type === "bet");
+  const hasRaise = legals.some((a) => a.action_type === "raise");
+  const hasCheck = legals.some((a) => a.action_type === "check");
+  const hasCall = legals.some((a) => a.action_type === "call");
+
+  // CHECK vs CALL (driven by to_call)
+  if (toCall <= 0 && hasCall) return false;
+  if (toCall > 0 && hasCheck) return false;
+  // BET vs RAISE (driven by current_bet)
+  if (publicState.current_bet === 0 && hasRaise) return false;
+  if (publicState.current_bet > 0 && hasBet) return false;
+
+  return true;
 }
 
 export function ActionBar({
@@ -21,14 +87,8 @@ export function ActionBar({
     if (!yourTurn) setBetAmount(0);
   }, [yourTurn, publicState?.hand_id]);
 
-  // Consistency check: if our private state says it's our turn but the public
-  // state's to_act list disagrees, the two snapshots have drifted (e.g. a
-  // private event from before a phase advance is still in our local state
-  // while the public state has already moved on). Hide the action bar in
-  // that case to prevent submitting actions against a stale legal-actions list.
-  const publicToActMatches =
-    publicState?.to_act?.[0] === (myHandle ?? "");
-  const stateConsistent = !yourTurn || publicToActMatches;
+  const stateConsistent =
+    !publicState || isStateConsistent(publicState, legals, yourTurn, myHandle);
 
   if (!publicState || !yourTurn || legals.length === 0 || !stateConsistent) {
     return (

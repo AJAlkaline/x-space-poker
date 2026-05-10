@@ -165,7 +165,13 @@ async def leave_table(table_id: str, player_id: PlayerId) -> dict:
 
 @router.get("/hands/{hand_id}/replay")
 async def get_hand_replay(hand_id: str) -> dict:
-    """Return everything needed to replay a completed hand."""
+    """Return everything needed to replay a completed hand.
+
+    Includes per-action public_state snapshots when start_state was
+    captured (i.e. for hands recorded after the start_state column was
+    added). Older hands return snapshots=None — the client should fall
+    back to a narration-only view.
+    """
     if not get_settings().persistence_enabled:
         raise HTTPException(503, "persistence not enabled")
     try:
@@ -176,4 +182,54 @@ async def get_hand_replay(hand_id: str) -> dict:
         replay = await persistence.get_hand_for_replay(s, hid)
         if replay is None:
             raise HTTPException(404, "hand not found or not yet complete")
-        return replay
+
+    # Reconstruct snapshots outside the DB session (engine work, no I/O).
+    from app.services.replay import reconstruct_snapshots
+    replay["snapshots"] = reconstruct_snapshots(replay)
+    return replay
+
+
+@router.get("/{code}/hands")
+async def list_table_hands(code: str, limit: int = 20) -> dict:
+    """List recently completed hands at a table, newest first.
+
+    Used by the lobby's "recent hands" section. Each entry has the hand_id
+    and minimal metadata — clients can fetch the full replay separately.
+    """
+    if not get_settings().persistence_enabled:
+        raise HTTPException(503, "persistence not enabled")
+    if limit < 1 or limit > 100:
+        raise HTTPException(400, "limit must be between 1 and 100")
+    async with get_session() as s:
+        # Resolve table by code first.
+        from sqlalchemy import select
+
+        from app.db.models import Hand as HandModel
+        from app.db.models import Table as TableModel
+        result = await s.execute(
+            select(TableModel).where(TableModel.code == code),
+        )
+        table_row = result.scalar_one_or_none()
+        if table_row is None:
+            raise HTTPException(404, "table not found")
+
+        # Most recent completed hands (deck_seed_reveal IS NOT NULL).
+        result = await s.execute(
+            select(HandModel)
+            .where(HandModel.table_id == table_row.id)
+            .where(HandModel.deck_seed_reveal.isnot(None))
+            .order_by(HandModel.started_at.desc())
+            .limit(limit),
+        )
+        hands = result.scalars().all()
+        return {
+            "code": code,
+            "hands": [
+                {
+                    "hand_id": str(h.id),
+                    "hand_number": h.hand_number,
+                    "started_at": h.started_at.isoformat() if h.started_at else None,
+                }
+                for h in hands
+            ],
+        }

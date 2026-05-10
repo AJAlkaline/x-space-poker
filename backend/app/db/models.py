@@ -108,6 +108,11 @@ class Hand(Base):
     hand_number: Mapped[int] = mapped_column(Integer)
     deck_seed_commit: Mapped[str] = mapped_column(String(64))
     deck_seed_reveal: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Captured at hand-start so the replay viewer can drive the engine
+    # forward from a known initial state. Old rows from before this column
+    # was added will have NULL here and fall back to the narration-only
+    # replay view on the client.
+    start_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     final_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

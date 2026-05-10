@@ -187,14 +187,18 @@ async def record_hand_started(
     table_id: uuid.UUID,
     hand_number: int,
     deck_commit: str,
+    start_state: dict | None = None,
 ) -> None:
-    """Insert a Hand row at the start of a hand."""
+    """Insert a Hand row at the start of a hand. `start_state` should be the
+    public_view at hand-start time — the replay viewer needs it to drive
+    the engine forward from a known initial state."""
     session.add(Hand(
         id=hand_id,
         table_id=table_id,
         hand_number=hand_number,
         deck_seed_commit=deck_commit,
         deck_seed_reveal=None,
+        start_state=start_state,
         final_state=None,
     ))
     await session.flush()
@@ -359,7 +363,13 @@ async def get_hand_for_replay(
     session: AsyncSession, hand_id: uuid.UUID,
 ) -> dict | None:
     """Return everything needed to replay a hand: the hand row + all actions.
-    Returns None if hand not found or not yet complete."""
+
+    Action records have user_id resolved to handle (the engine works in
+    handle space). start_state is included so callers can reconstruct the
+    initial engine state for snapshot generation.
+
+    Returns None if hand not found or not yet complete.
+    """
     hand = await session.get(Hand, hand_id)
     if hand is None or hand.deck_seed_reveal is None:
         return None
@@ -368,18 +378,31 @@ async def get_hand_for_replay(
         .order_by(HandAction.sequence),
     )
     actions = result.scalars().all()
+
+    # Resolve user_ids to handles in one batch query.
+    user_ids = list({a.user_id for a in actions})
+    handle_by_id: dict[uuid.UUID, str] = {}
+    if user_ids:
+        u_result = await session.execute(
+            select(User).where(User.id.in_(user_ids)),
+        )
+        for u in u_result.scalars().all():
+            handle_by_id[u.id] = u.handle
+
     return {
         "hand_id": str(hand.id),
         "table_id": str(hand.table_id),
         "hand_number": hand.hand_number,
         "deck_seed_commit": hand.deck_seed_commit,
         "deck_seed_reveal": hand.deck_seed_reveal,
+        "start_state": hand.start_state,
         "final_state": hand.final_state,
         "started_at": hand.started_at.isoformat() if hand.started_at else None,
         "actions": [
             {
                 "sequence": a.sequence,
                 "user_id": str(a.user_id),
+                "handle": handle_by_id.get(a.user_id),
                 "action_type": a.action_type,
                 "amount": a.amount,
                 "at": a.at.isoformat() if a.at else None,

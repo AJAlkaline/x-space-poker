@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useSession as useHandle } from "../lib/useSession";
 import { useTableSocket } from "../lib/useTableSocket";
 import type {
@@ -180,8 +180,120 @@ export function TablePage() {
       )}
 
       <EventLog entries={logState.entries} />
+
+      <RecentHands code={code ?? ""} />
     </div>
   );
+}
+
+interface HandSummary {
+  hand_id: string;
+  hand_number: number;
+  started_at: string | null;
+}
+
+function RecentHands({ code }: { code: string }) {
+  const [hands, setHands] = useState<HandSummary[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!code) return;
+    try {
+      const res = await fetch(`/api/tables/${encodeURIComponent(code)}/hands`, {
+        credentials: "include",
+      });
+      if (res.status === 503) {
+        // Persistence not enabled — fail silently, don't show the section.
+        setHands([]);
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(`${res.status}: ${await res.text()}`);
+      }
+      const data = (await res.json()) as { hands: HandSummary[] };
+      setHands(data.hands);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [code]);
+
+  useEffect(() => {
+    if (open && hands === null) refresh();
+  }, [open, hands, refresh]);
+
+  if (!code) return null;
+
+  return (
+    <details
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+      style={{
+        padding: "0.5rem 0.75rem",
+        border: "1px solid #2a2e36",
+        borderRadius: 8,
+        fontSize: "0.85rem",
+      }}
+    >
+      <summary style={{ cursor: "pointer", userSelect: "none" }}>
+        Recent hands at this table
+        {hands && hands.length > 0 && (
+          <span style={{ marginLeft: "0.5rem", opacity: 0.5 }}>
+            ({hands.length})
+          </span>
+        )}
+      </summary>
+      <div style={{ marginTop: "0.5rem" }}>
+        {error && (
+          <div style={{ color: "#e05050", fontSize: "0.8rem" }}>{error}</div>
+        )}
+        {hands === null && !error && (
+          <div style={{ opacity: 0.6 }}>Loading…</div>
+        )}
+        {hands && hands.length === 0 && (
+          <div style={{ opacity: 0.6, fontStyle: "italic" }}>
+            No completed hands yet.
+          </div>
+        )}
+        {hands && hands.length > 0 && (
+          <ul style={{ margin: 0, paddingLeft: "1.25rem", display: "grid", gap: "0.2rem" }}>
+            {hands.map((h) => (
+              <li key={h.hand_id}>
+                <Link to={`/replay/${h.hand_id}`}>
+                  Hand #{h.hand_number}
+                </Link>
+                {h.started_at && (
+                  <span style={{ opacity: 0.5, marginLeft: "0.5rem" }}>
+                    {formatTimestamp(h.started_at)}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <button
+          onClick={refresh}
+          style={{
+            marginTop: "0.5rem",
+            fontSize: "0.75rem",
+            padding: "0.2rem 0.5rem",
+          }}
+        >
+          Refresh
+        </button>
+      </div>
+    </details>
+  );
+}
+
+function formatTimestamp(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString();
+  } catch {
+    return iso;
+  }
 }
 
 function SeatPicker({

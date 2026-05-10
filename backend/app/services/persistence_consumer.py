@@ -70,6 +70,7 @@ async def run_persistence_consumer(
                             table_id=uuid.UUID(event.table_id),
                             hand_number=event.hand_number,
                             deck_commit=event.deck_commit,
+                            start_state=event.public_state,
                         )
 
                 elif isinstance(event, ActionAppliedEvent):

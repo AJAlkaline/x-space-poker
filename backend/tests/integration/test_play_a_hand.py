@@ -43,7 +43,7 @@ def _stack_of(public_state: dict, player_id: str) -> int:
 def test_two_players_play_a_hand(client: TestClient) -> None:
     # Alice creates the table.
     res = client.post(
-        "/tables",
+        "/api/tables",
         params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
@@ -63,7 +63,7 @@ def test_two_players_play_a_hand(client: TestClient) -> None:
         # Both players join.
         for who, seat in [("alice", 0), ("bob", 1)]:
             res = client.post(
-                "/tables/join",
+                "/api/tables/join",
                 params={"as": who},
                 json={"code": code, "seat": seat, "buy_in": 1000},
             )
@@ -121,7 +121,7 @@ def test_two_players_play_a_hand(client: TestClient) -> None:
 def test_pot_updates_through_betting_round(client: TestClient) -> None:
     """Regression: pot_total should update on every action, not just at hand end."""
     res = client.post(
-        "/tables",
+        "/api/tables",
         params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
@@ -135,7 +135,7 @@ def test_pot_updates_through_betting_round(client: TestClient) -> None:
 
         for who, seat in [("alice", 0), ("bob", 1)]:
             client.post(
-                "/tables/join",
+                "/api/tables/join",
                 params={"as": who},
                 json={"code": code, "seat": seat, "buy_in": 1000},
             )
@@ -180,7 +180,7 @@ def test_seats_broadcast_after_each_join(client: TestClient) -> None:
     their seating before any `hand_started` event arrives. Without this, the
     UI keeps showing the seat picker after a player has actually sat down."""
     res = client.post(
-        "/tables",
+        "/api/tables",
         params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
@@ -196,7 +196,7 @@ def test_seats_broadcast_after_each_join(client: TestClient) -> None:
         # Alice joins; her socket must receive a seats update with her in it
         # BEFORE any hand_started arrives.
         client.post(
-            "/tables/join",
+            "/api/tables/join",
             params={"as": "alice"},
             json={"code": code, "seat": 0, "buy_in": 1000},
         )
@@ -206,7 +206,7 @@ def test_seats_broadcast_after_each_join(client: TestClient) -> None:
         # Bob joins; both sockets should receive a seats update reflecting
         # both players seated, BEFORE hand_started.
         client.post(
-            "/tables/join",
+            "/api/tables/join",
             params={"as": "bob"},
             json={"code": code, "seat": 1, "buy_in": 1000},
         )

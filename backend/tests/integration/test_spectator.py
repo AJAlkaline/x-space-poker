@@ -32,7 +32,7 @@ def _drain_until(ws, types, cap=40):
 def test_spectator_receives_public_state(client: TestClient) -> None:
     """A spectator connects mid-hand and sees the table state."""
     res = client.post(
-        "/tables", params={"as": "alice"},
+        "/api/tables", params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
     code = res.json()["code"]
@@ -43,7 +43,7 @@ def test_spectator_receives_public_state(client: TestClient) -> None:
         _drain_until(ws_b, ["seats"])
         for who, seat in [("alice", 0), ("bob", 1)]:
             client.post(
-                "/tables/join", params={"as": who},
+                "/api/tables/join", params={"as": who},
                 json={"code": code, "seat": seat, "buy_in": 1000},
             )
         _drain_until(ws_a, ["hand_started"])
@@ -62,7 +62,7 @@ def test_spectator_never_sees_hole_cards(client: TestClient) -> None:
     """Hidden information audit: a spectator must NEVER receive hole cards
     (except in the optional showdown reveal which is public information)."""
     res = client.post(
-        "/tables", params={"as": "alice"},
+        "/api/tables", params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
     code = res.json()["code"]
@@ -75,7 +75,7 @@ def test_spectator_never_sees_hole_cards(client: TestClient) -> None:
 
         for who, seat in [("alice", 0), ("bob", 1)]:
             client.post(
-                "/tables/join", params={"as": who},
+                "/api/tables/join", params={"as": who},
                 json={"code": code, "seat": seat, "buy_in": 1000},
             )
 
@@ -126,7 +126,7 @@ def test_spectator_never_sees_hole_cards(client: TestClient) -> None:
 def test_viewer_count_updates(client: TestClient) -> None:
     """Viewer count tracks public-stream subscribers (players + spectators)."""
     res = client.post(
-        "/tables", params={"as": "alice"},
+        "/api/tables", params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
     code = res.json()["code"]

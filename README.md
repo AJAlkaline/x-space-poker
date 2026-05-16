@@ -116,6 +116,24 @@ Clicking "Sign in with X" preserves the current page: if you're at `/table/ABC23
 
 The fake-login path is only reachable when `AUTH_MODE` allows it. In `x_oauth` mode the `/auth/fake-login` endpoint returns 404 even if someone calls it directly — defense in depth so a misconfigured prod deploy can't accidentally accept arbitrary handles.
 
+## Deployment topology
+
+Single-origin: one container, one port (8000), serves both the SPA and the API. No nginx or reverse-proxy needed for routing.
+
+URL structure:
+
+- `/` — SPA shell (React Router takes over client-side)
+- `/replay/:id`, `/table/:code`, `/spectate/:code` — SPA client routes, served by the same SPA shell with a 200
+- `/assets/*` — Vite-bundled JS/CSS (hashed filenames, cacheable forever)
+- `/api/tables/*` — JSON API for table operations
+- `/auth/*` — OAuth + fake-login endpoints
+- `/ws/tables/{code}`, `/ws/spectate/{code}` — WebSocket endpoints
+- `/health`, `/api/health` — health checks
+
+The Dockerfile is multi-stage: stage 1 builds the frontend with `npm run build`, stage 2 copies `frontend/dist` into `/app/static` in the runtime image. The backend reads `STATIC_DIR` (defaulting to `/app/static` in the container) and serves the SPA from there. For any unmatched GET that isn't an API path, the backend returns `index.html` so React Router can handle the route client-side.
+
+In dev, the frontend runs separately via `vite dev` on :5173 with a proxy that forwards `/api/*`, `/auth/*`, and `/ws/*` to the backend on :8000. The backend doesn't serve the SPA in dev (it can, if you point `STATIC_DIR` at `frontend/dist` after a build, but there's no reason to during normal dev).
+
 ## Legal posture
 
 Play money only. No player-to-player transfers. No cash-out. The currency abstraction (`accounts.currency_type`) is structured so a future regulated real-money or crypto variant can be added behind the same engine, but **none of that code exists today** and adding it without proper licensing is not legal. See `docs/legal.md`.

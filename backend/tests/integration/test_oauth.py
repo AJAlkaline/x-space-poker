@@ -235,7 +235,7 @@ def test_websocket_authenticates_via_cookie(client: TestClient) -> None:
         client.get("/auth/callback", params={"code": "c", "state": state}, follow_redirects=False)
 
     # Create a table (auth via cookie).
-    res = client.post("/tables", json={"small_blind": 5, "big_blind": 10})
+    res = client.post("/api/tables", json={"small_blind": 5, "big_blind": 10})
     assert res.status_code == 200
     code = res.json()["code"]
 

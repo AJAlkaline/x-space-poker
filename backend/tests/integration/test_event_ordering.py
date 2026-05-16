@@ -82,7 +82,7 @@ def test_to_act_player_gets_fresh_legals_after_street_advance(
     deterministic.
     """
     res = client.post(
-        "/tables", params={"as": "alice"},
+        "/api/tables", params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
     code = res.json()["code"]
@@ -93,7 +93,7 @@ def test_to_act_player_gets_fresh_legals_after_street_advance(
         _drain_until(ws_b, ["seats"])
         for who, seat in [("alice", 0), ("bob", 1)]:
             client.post(
-                "/tables/join", params={"as": who},
+                "/api/tables/join", params={"as": who},
                 json={"code": code, "seat": seat, "buy_in": 1000},
             )
 
@@ -175,7 +175,7 @@ def test_player_queue_orders_public_and_private(client: TestClient) -> None:
     any subsequent private event — the order they were published.
     """
     res = client.post(
-        "/tables", params={"as": "alice"},
+        "/api/tables", params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
     code = res.json()["code"]
@@ -186,7 +186,7 @@ def test_player_queue_orders_public_and_private(client: TestClient) -> None:
         _drain_until(ws_b, ["seats"])
         for who, seat in [("alice", 0), ("bob", 1)]:
             client.post(
-                "/tables/join", params={"as": who},
+                "/api/tables/join", params={"as": who},
                 json={"code": code, "seat": seat, "buy_in": 1000},
             )
         _drain_until(ws_a, ["hand_started"])
@@ -248,7 +248,7 @@ def test_bb_gets_fresh_private_after_phase_advance_when_still_to_act(
     private even when the same player is to-act on both sides.
     """
     res = client.post(
-        "/tables", params={"as": "alice"},
+        "/api/tables", params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
     code = res.json()["code"]
@@ -259,7 +259,7 @@ def test_bb_gets_fresh_private_after_phase_advance_when_still_to_act(
         _drain_until(ws_b, ["seats"])
         for who, seat in [("alice", 0), ("bob", 1)]:
             client.post(
-                "/tables/join", params={"as": who},
+                "/api/tables/join", params={"as": who},
                 json={"code": code, "seat": seat, "buy_in": 1000},
             )
         _drain_until(ws_a, ["hand_started"])

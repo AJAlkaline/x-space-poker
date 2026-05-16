@@ -41,7 +41,7 @@ def _drain_until(ws, types, cap=40):
 def _start_two_player_hand(client: TestClient):
     """Helper: create table, seat alice + bob, return (code, ws_a, ws_b)."""
     res = client.post(
-        "/tables",
+        "/api/tables",
         params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
@@ -57,7 +57,7 @@ def test_action_timer_auto_folds_when_player_doesnt_act(client: TestClient) -> N
         _drain_until(ws_b, ["seats"])
         for who, seat in [("alice", 0), ("bob", 1)]:
             client.post(
-                "/tables/join",
+                "/api/tables/join",
                 params={"as": who},
                 json={"code": code, "seat": seat, "buy_in": 1000},
             )
@@ -86,7 +86,7 @@ def test_action_timer_includes_deadlines_in_private_view(client: TestClient) -> 
         _drain_until(ws_b, ["seats"])
         for who, seat in [("alice", 0), ("bob", 1)]:
             client.post(
-                "/tables/join",
+                "/api/tables/join",
                 params={"as": who},
                 json={"code": code, "seat": seat, "buy_in": 1000},
             )
@@ -139,7 +139,7 @@ def test_disconnect_during_action_auto_folds_and_sits_out(
             _drain_until(wa, ["seats"])
             for who, seat in [("alice", 0), ("bob", 1)]:
                 client.post(
-                    "/tables/join",
+                    "/api/tables/join",
                     params={"as": who},
                     json={"code": code, "seat": seat, "buy_in": 1000},
                 )

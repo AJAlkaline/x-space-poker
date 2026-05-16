@@ -63,7 +63,7 @@ def test_buy_in_persists_to_db(client: TestClient) -> None:
     """A buy-in should debit the persisted account, and /auth/me must
     reflect the DB balance (not the in-memory wallet)."""
     res = client.post(
-        "/tables", params={"as": "alice"},
+        "/api/tables", params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
     assert res.status_code == 200, res.text
@@ -76,7 +76,7 @@ def test_buy_in_persists_to_db(client: TestClient) -> None:
 
     # Join debits 1000.
     res = client.post(
-        "/tables/join", params={"as": "alice"},
+        "/api/tables/join", params={"as": "alice"},
         json={"code": code, "seat": 0, "buy_in": 1000},
     )
     assert res.status_code == 200, res.text
@@ -95,7 +95,7 @@ def test_completed_hand_is_replayable(client: TestClient) -> None:
     that the final snapshot reveals showdown information.
     """
     res = client.post(
-        "/tables", params={"as": "alice"},
+        "/api/tables", params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
     code = res.json()["code"]
@@ -106,7 +106,7 @@ def test_completed_hand_is_replayable(client: TestClient) -> None:
         _drain_until(ws_b, ["seats"])
         for who, seat in [("alice", 0), ("bob", 1)]:
             client.post(
-                "/tables/join", params={"as": who},
+                "/api/tables/join", params={"as": who},
                 json={"code": code, "seat": seat, "buy_in": 1000},
             )
 
@@ -127,7 +127,7 @@ def test_completed_hand_is_replayable(client: TestClient) -> None:
     _t.sleep(0.2)
 
     # Replay endpoint should return the hand with action log + snapshots.
-    res = client.get(f"/tables/hands/{hand_id}/replay")
+    res = client.get(f"/api/tables/hands/{hand_id}/replay")
     assert res.status_code == 200, res.text
     replay = res.json()
     assert replay["hand_id"] == hand_id
@@ -172,7 +172,7 @@ def test_completed_hand_is_replayable(client: TestClient) -> None:
 def test_table_hands_list_returns_completed_hands(client: TestClient) -> None:
     """GET /tables/<code>/hands lists recent completed hands for the table."""
     res = client.post(
-        "/tables", params={"as": "alice"},
+        "/api/tables", params={"as": "alice"},
         json={"small_blind": 5, "big_blind": 10},
     )
     code = res.json()["code"]
@@ -183,7 +183,7 @@ def test_table_hands_list_returns_completed_hands(client: TestClient) -> None:
         _drain_until(ws_b, ["seats"])
         for who, seat in [("alice", 0), ("bob", 1)]:
             client.post(
-                "/tables/join", params={"as": who},
+                "/api/tables/join", params={"as": who},
                 json={"code": code, "seat": seat, "buy_in": 1000},
             )
 
@@ -199,7 +199,7 @@ def test_table_hands_list_returns_completed_hands(client: TestClient) -> None:
     import time as _t
     _t.sleep(0.2)
 
-    res = client.get(f"/tables/{code}/hands")
+    res = client.get(f"/api/tables/{code}/hands")
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["code"] == code
@@ -211,7 +211,7 @@ def test_table_hands_list_returns_completed_hands(client: TestClient) -> None:
 
 
 def test_hands_list_404_for_unknown_table(client: TestClient) -> None:
-    res = client.get("/tables/NOPE99/hands")
+    res = client.get("/api/tables/NOPE99/hands")
     assert res.status_code == 404
 
 
@@ -224,14 +224,14 @@ async def test_recovery_rehydrates_table(persistent_app, monkeypatch) -> None:
     # First "session": create a table and seat alice.
     with TestClient(app) as c:
         res = c.post(
-            "/tables", params={"as": "alice"},
+            "/api/tables", params={"as": "alice"},
             json={"small_blind": 5, "big_blind": 10},
         )
         assert res.status_code == 200
         code = res.json()["code"]
         table_id = res.json()["table_id"]
         res = c.post(
-            "/tables/join", params={"as": "alice"},
+            "/api/tables/join", params={"as": "alice"},
             json={"code": code, "seat": 0, "buy_in": 1000},
         )
         assert res.status_code == 200

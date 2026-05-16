@@ -218,3 +218,150 @@ def test_player_queue_orders_public_and_private(client: TestClient) -> None:
         # End the hand quickly so the test doesn't wait for the action timer
         # on bob's pre-flop turn.
         ws_b.send_json({"type": "action", "action": "fold"})
+
+
+def test_bb_gets_fresh_private_after_phase_advance_when_still_to_act(
+    client: TestClient,
+) -> None:
+    """User-reported bug:
+      "During heads-up the first player to act post-flop has their
+       actionbar stuck on 'Waiting for turn...' until they refresh the
+       page."
+
+    Heads-up turn order: SB (button) acts first pre-flop, BB acts last
+    pre-flop. Post-flop: BB acts first. So if alice is SB (button) and
+    bob is BB:
+
+      Pre-flop: alice calls, bob checks (option). Phase advances to flop.
+      Post-flop: bob is to-act AGAIN.
+
+    The bug was that the table loop tracked the to-act player as a single
+    string. Since `current_to_act == 'bob'` both before and after the
+    phase advance, the loop treated this as no-change and didn't publish
+    a fresh deadline-bearing private state for bob's flop turn. Bob's
+    client kept showing the stale BB-option legals (with RAISE, etc.),
+    or the consistency-check version of the bar said "Waiting for your
+    turn..." until the auto-fold/check timer eventually fired and broke
+    the impasse — visible as a stuck UI from the user's perspective.
+
+    Fix: track (player_id, phase) so a phase advance forces a fresh
+    private even when the same player is to-act on both sides.
+    """
+    res = client.post(
+        "/tables", params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+
+    with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+         client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+        _drain_until(ws_a, ["seats"])
+        _drain_until(ws_b, ["seats"])
+        for who, seat in [("alice", 0), ("bob", 1)]:
+            client.post(
+                "/tables/join", params={"as": who},
+                json={"code": code, "seat": seat, "buy_in": 1000},
+            )
+        _drain_until(ws_a, ["hand_started"])
+        _drain_until(ws_b, ["hand_started"])
+
+        # Alice (SB/button) is to-act first pre-flop.
+        a_priv = _drain_until(ws_a, ["private"])
+        assert a_priv["state"]["your_turn"] is True
+
+        # Alice calls. Bob (BB) becomes to-act with the option.
+        ws_a.send_json({"type": "action", "action": "call"})
+
+        # Drain bob's stream until he gets a to-act private (his BB option).
+        bb_option_priv = None
+        for _ in range(20):
+            msg = ws_b.receive_json()
+            if msg.get("type") == "private" and msg["state"]["your_turn"]:
+                bb_option_priv = msg
+                break
+        assert bb_option_priv is not None, "bob never got a BB-option private"
+        bb_legals_pre = {a["action_type"] for a in bb_option_priv["state"]["legal_actions"]}
+        assert "check" in bb_legals_pre and "raise" in bb_legals_pre, (
+            f"BB option should have [check, raise], got {bb_legals_pre}"
+        )
+
+        # Bob checks the option. Phase advances to flop. Bob is to-act AGAIN.
+        ws_b.send_json({"type": "action", "action": "check"})
+
+        # Bob MUST receive a fresh private state for his flop turn.
+        #
+        # We use the existing fast_timers fixture's settings indirectly:
+        # if the (player_id, phase) tracking is missing, no fresh private
+        # is published, and the only way bob's stream advances is when
+        # the action timer auto-checks bob a few seconds later. That
+        # post-timer state_update has auto=True; the legitimate fix
+        # produces an immediate private with deadlines and no auto flag.
+        #
+        # So our test: read the next few messages, look for a fresh
+        # `private` event with `your_turn=true` AND deadlines set. With
+        # the fix, this arrives within the first 2 messages after bob's
+        # check. Without the fix, the only post-check messages are
+        # state_updates (no private to bob) until the auto-check fires —
+        # and we explicitly check that we don't have to wait for that.
+
+        flop_advance_seen = False
+        bob_flop_priv = None
+        any_auto_fired = False
+
+        # Drain up to 10 messages; with the fix, we'll see private quickly.
+        for _ in range(10):
+            msg = ws_b.receive_json()
+            t = msg.get("type")
+            if t == "state_update":
+                if msg["state"]["phase"] == "flop":
+                    flop_advance_seen = True
+                # If an auto-check fires, that's the bug — we got rescued
+                # only by the timer.
+                action = msg.get("action") or {}
+                if action.get("auto") and msg["state"]["phase"] == "flop":
+                    any_auto_fired = True
+                    break
+            elif (
+                t == "private"
+                and flop_advance_seen
+                and msg["state"]["your_turn"]
+            ):
+                bob_flop_priv = msg
+                break
+
+        assert flop_advance_seen, "bob never saw the flop state_update"
+        assert not any_auto_fired, (
+            "BUG: bob's flop turn was only resolved by the action timer "
+            "auto-check firing (i.e. UI was stuck until timer fired). "
+            "Expected a fresh private with deadlines for bob's flop turn."
+        )
+        assert bob_flop_priv is not None, (
+            "BUG: bob never received a fresh private for his flop turn — "
+            "the action loop didn't republish because (player_id, phase) "
+            "tracking was just (player_id) and bob was to-act both before "
+            "and after the phase advance"
+        )
+
+        # The flop legals must reflect the new street: BET legal, RAISE not.
+        bb_legals_post = {a["action_type"] for a in bob_flop_priv["state"]["legal_actions"]}
+        assert "check" in bb_legals_post, (
+            f"flop legals must include CHECK, got {bb_legals_post}"
+        )
+        assert "bet" in bb_legals_post, (
+            f"flop legals must include BET (current_bet=0), got {bb_legals_post}"
+        )
+        assert "raise" not in bb_legals_post, (
+            f"flop legals must NOT include RAISE (current_bet=0), got {bb_legals_post}"
+        )
+        assert "call" not in bb_legals_post, (
+            f"flop legals must NOT include CALL (current_bet=0), got {bb_legals_post}"
+        )
+
+        # Also: the deadlines must be set on this fresh private. Without
+        # them, the action timer is effectively missing on the client.
+        assert bob_flop_priv["state"]["base_deadline_unix_ms"] is not None, (
+            "fresh private after phase advance must include action timer deadlines"
+        )
+
+        # End the hand quickly.
+        ws_b.send_json({"type": "action", "action": "fold"})

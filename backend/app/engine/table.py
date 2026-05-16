@@ -502,7 +502,10 @@ def _advance_street(state: GameState, deck: Deck) -> GameState:
         (s for s in in_hand_seat_nums if s > state.button),
         in_hand_seat_nums[0],
     )
-    # In heads-up post-flop, SB acts first. With 3+, first active left of button.
+    # First-to-act post-flop is the first active seat left of the button.
+    # In heads-up that's the BB (since the button = SB acts last post-flop,
+    # opposite of pre-flop where button acts first). With 3+, it's whoever
+    # holds SB position (or the next active seat if SB folded).
     to_act = _action_order(in_hand_seat_nums, first_seat, new_players)
 
     return replace(

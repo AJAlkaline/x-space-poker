@@ -450,16 +450,26 @@ class TableManager:
                     self._publish_private_state(rt, p.id)
 
                 # ---- Action loop ----
+                # Track (to-act player, phase) together. If either changes
+                # we republish the deadline-bearing private state. The phase
+                # part matters because in heads-up (and other corner cases)
+                # the same player can be to-act both before and after a
+                # phase transition — without phase tracking, the new
+                # round's deadline-bearing private is never sent and the
+                # client UI gets stuck on stale pre-transition legals.
                 to_act_deadline_started_at: float | None = None
-                to_act_player_for_deadline: str | None = None
+                to_act_player_for_deadline: tuple[str | None, HandPhase | None] = (
+                    None, None,
+                )
 
                 while rt.current_state.phase != HandPhase.COMPLETE:
                     current_to_act = (
                         rt.current_state.betting.to_act[0]
                         if rt.current_state.betting.to_act else None
                     )
-                    if current_to_act != to_act_player_for_deadline:
-                        to_act_player_for_deadline = current_to_act
+                    current_round_key = (current_to_act, rt.current_state.phase)
+                    if current_round_key != to_act_player_for_deadline:
+                        to_act_player_for_deadline = current_round_key
                         to_act_deadline_started_at = time.monotonic()
                         if current_to_act is not None:
                             self._publish_private_state_with_deadlines(

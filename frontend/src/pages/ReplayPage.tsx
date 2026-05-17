@@ -207,7 +207,7 @@ export function ReplayPage() {
         </Link>
       </div>
 
-      <TableView publicState={currentSnap.public_state} seats={EMPTY_SEATS} />
+      <TableView publicState={currentSnap.public_state} seats={EMPTY_SEATS} potDistributions={null} />
 
       <ReplayControls
         step={step}
@@ -283,7 +283,7 @@ function snapshotToServerMessage(
     return { type: "hand_started", state: snap.public_state };
   }
   if (snap.public_state.phase === "complete") {
-    return { type: "hand_complete", state: snap.public_state };
+    return { type: "hand_complete", state: snap.public_state, pot_distributions: [] };
   }
   return {
     type: "state_update",

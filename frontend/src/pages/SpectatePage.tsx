@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useSession as useHandle } from "../lib/useSession";
 import type {
+  PotDistribution,
   PublicState,
   SeatInfo,
   ServerMessage,
@@ -29,6 +30,8 @@ export function SpectatePage() {
   );
   const [viewerCount, setViewerCount] = useState(0);
   const [logState, setLogState] = useState<EventLogState>(emptyLogState);
+  const [potDistributions, setPotDistributions] =
+    useState<PotDistribution[] | null>(null);
 
   const handleMessage = useCallback((msg: ServerMessage) => {
     // Spectators have no `myHandle` for personalized narration —
@@ -39,12 +42,19 @@ export function SpectatePage() {
 
     switch (msg.type) {
       case "hand_started":
+        setPublicState(msg.state);
+        setPotDistributions(null);
+        break;
       case "state_update":
+        setPublicState(msg.state);
+        break;
       case "hand_complete":
         setPublicState(msg.state);
+        setPotDistributions(msg.pot_distributions ?? []);
         break;
       case "hand_aborted":
         setPublicState(null);
+        setPotDistributions(null);
         break;
       case "seats":
         setSeats(msg.seats);
@@ -95,7 +105,7 @@ export function SpectatePage() {
         )}
       </div>
 
-      <TableView publicState={publicState} seats={seats} />
+      <TableView publicState={publicState} seats={seats} potDistributions={potDistributions} />
       <EventLog entries={logState.entries} />
     </div>
   );

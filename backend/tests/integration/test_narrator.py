@@ -180,6 +180,104 @@ class TestHandLifecycle:
         assert "alice" in text.lower()
         assert text  # has content
 
+    def test_showdown_narrates_reveals_before_winner(self):
+        """When 2+ players go to showdown with revealed cards, the narrator
+        should announce each reveal before declaring the winner."""
+        n = Narrator(seed=0)
+        # State after the river — both players still in, hole cards revealed.
+        ps = {
+            "hand_number": 1,
+            "phase": "complete",
+            "board": ["Kc", "Ks", "4h", "7d", "2s"],
+            "current_bet": 0,
+            "big_blind": 10,
+            "small_blind": 5,
+            "pot_total": 200,
+            "button": 0,
+            "players": [
+                {"id": "alice", "seat": 0, "status": "active",
+                 "street_committed": 100, "total_committed": 100,
+                 "hole": ["Ah", "As"]},
+                {"id": "bob", "seat": 1, "status": "active",
+                 "street_committed": 100, "total_committed": 100,
+                 "hole": ["Qc", "Qd"]},
+            ],
+        }
+        n.on_hand_started(ps)
+        text = n.on_hand_completed(
+            ps,
+            [{
+                "amount": 200,
+                "winners": [{
+                    "player_id": "alice",
+                    "hand_description": "Two Pair, Aces and Kings",
+                    "best_five": ["Ah", "As", "Kc", "Ks", "7d"],
+                }],
+            }],
+        )
+        lower = text.lower()
+        # Both players' reveals should be mentioned.
+        assert "alice" in lower
+        assert "bob" in lower
+        # The actual hole cards (spelled out) should appear.
+        assert "ace" in lower  # alice's aces
+        assert "queen" in lower  # bob's queens
+        # Reveal verb — at least one of these should match.
+        assert any(verb in lower for verb in ("shows", "turns over", "tables"))
+        # Winner is still announced with hand description.
+        assert "two pair" in lower
+        # And the reveals come before the winner announcement.
+        win_pos = lower.find("takes it")
+        reveal_pos = lower.find("shows")
+        if reveal_pos == -1:
+            reveal_pos = lower.find("turns over")
+        if reveal_pos == -1:
+            reveal_pos = lower.find("tables")
+        assert reveal_pos != -1 and reveal_pos < win_pos, (
+            f"reveals should come before winner announcement: {text!r}"
+        )
+
+    def test_fold_win_does_not_narrate_reveals(self):
+        """When a hand ends by everyone folding, no holes are revealed and
+        the narrator shouldn't claim anyone showed cards."""
+        n = Narrator(seed=0)
+        ps = {
+            "hand_number": 1,
+            "phase": "complete",
+            "board": [],  # didn't even see the flop
+            "current_bet": 0,
+            "big_blind": 10,
+            "small_blind": 5,
+            "pot_total": 15,
+            "button": 0,
+            "players": [
+                # bob is the survivor — but his hole is None (not revealed)
+                {"id": "alice", "seat": 0, "status": "folded",
+                 "street_committed": 5, "total_committed": 5, "hole": None},
+                {"id": "bob", "seat": 1, "status": "active",
+                 "street_committed": 10, "total_committed": 10, "hole": None},
+            ],
+        }
+        n.on_hand_started(ps)
+        text = n.on_hand_completed(
+            ps,
+            [{
+                "amount": 10,
+                "winners": [{
+                    "player_id": "bob",
+                    "hand_description": "",  # fold-win, no description
+                    "best_five": [],
+                }],
+            }],
+        )
+        lower = text.lower()
+        # Bob wins — that's the meaningful content.
+        assert "bob" in lower
+        # No reveal verbs should appear.
+        assert "shows" not in lower
+        assert "turns over" not in lower
+        assert "tables" not in lower
+
     def test_full_hand_produces_coherent_narration(self):
         """A heads-up hand from deal to win — make sure the sequence of
         narration lines is plausible."""

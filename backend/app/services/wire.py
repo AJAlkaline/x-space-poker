@@ -40,7 +40,11 @@ def public_event_to_wire(event: PublicEvent) -> dict:
             },
         }
     if isinstance(event, HandCompletedEvent):
-        return {"type": "hand_complete", "state": event.public_state}
+        return {
+            "type": "hand_complete",
+            "state": event.public_state,
+            "pot_distributions": event.pot_distributions or [],
+        }
     if isinstance(event, HandAbortedEvent):
         return {
             "type": "hand_aborted",

@@ -235,30 +235,105 @@ class Narrator:
     def on_hand_completed(
         self, public_state: dict, pot_distributions: list[dict],
     ) -> str:
-        """Hand resolved. Announce winners."""
+        """Hand resolved. Announce showdown reveals (if any) and winners.
+
+        New `pot_distributions` schema (from `_compute_pot_distributions`):
+            [{"amount": int, "winners": [
+                {"player_id": str, "hand_description": str,
+                 "best_five": [card_strs]}, ...
+            ]}, ...]
+        Older shape used plain strings in `winners`; we accept both.
+
+        For showdown hands (2+ players reach the river without folding), we
+        prepend a per-player reveal sentence so the narration reads like:
+            "Alice shows ace of hearts, king of hearts. Bob shows queen of
+            clubs, queen of diamonds. Alice takes it with two pair, aces
+            and kings."
+        """
         if not pot_distributions:
             return ""
-        # Simple case: one winner. Most hands.
+
+        def _winner_id(w) -> str:
+            """Accept both new dict-shaped winners and legacy string ids."""
+            if isinstance(w, dict):
+                return str(w.get("player_id", ""))
+            return str(w)
+
+        def _winner_desc(w) -> str:
+            if isinstance(w, dict):
+                return str(w.get("hand_description", ""))
+            return ""
+
+        # ---- Showdown reveal lines ----
+        # Build a list of (player_id, hole_cards) for everyone whose cards
+        # are revealed in the public_state — at showdown, the engine reveals
+        # holes of all non-folded players. Single-survivor wins don't reveal
+        # anyone's cards (some engines do, ours doesn't), so this naturally
+        # skips fold-wins.
+        reveal_lines: list[str] = []
+        revealed: list[tuple[int, str, list[str]]] = []  # (seat, id, holes)
+        for p in public_state.get("players") or []:
+            if not p:
+                continue
+            if p.get("status") == "folded":
+                continue
+            hole = p.get("hole")
+            if not hole or len(hole) < 2:
+                continue
+            revealed.append((int(p.get("seat") or 0), p.get("id", ""), list(hole)))
+
+        # Only count it as a showdown if 2+ players revealed.
+        if len(revealed) >= 2:
+            # Order clockwise from button so first to act post-flop speaks
+            # first — that's roughly the showdown order in casino rules,
+            # and at minimum makes the narration deterministic.
+            button = int(public_state.get("button") or 0)
+            n_seats = len(public_state.get("players") or []) or 1
+            revealed.sort(
+                key=lambda t: (t[0] - button - 1) % n_seats,
+            )
+            for _seat, pid, holes in revealed:
+                handle = self._handle(pid)
+                cards_str = ", ".join(_spell_card(c) for c in holes[:2])
+                reveal_lines.append(
+                    self._rng.choice([
+                        f"{handle} shows {cards_str}.",
+                        f"{handle} turns over {cards_str}.",
+                        f"{handle} tables {cards_str}.",
+                    ])
+                )
+
+        # ---- Winner announcement ----
+        winner_line = ""
         if len(pot_distributions) == 1:
             d = pot_distributions[0]
             winners = d.get("winners") or []
             amount = int(d.get("amount") or 0)
-            if not winners:
-                return ""
-            if len(winners) == 1:
-                w = winners[0]
-                handle = self._handle(w)
-                if self._hand.phase == "showdown" or self._went_to_showdown(public_state):
-                    hand_desc = self._winning_hand_description(w, public_state)
-                    if hand_desc:
-                        return f"{handle} takes it with {hand_desc}. {_format_chips(amount)}."
-                    return f"{handle} wins {_format_chips(amount)} at showdown."
-                return f"{handle} scoops {_format_chips(amount)}."
-            # Chopped pot
-            names = " and ".join(self._handle(w) for w in winners)
-            return f"{names} chop the pot."
-        # Side pots — say it concisely.
-        return "Multiple pots split among the winners."
+            if winners:
+                if len(winners) == 1:
+                    w = winners[0]
+                    wid = _winner_id(w)
+                    desc = _winner_desc(w)
+                    handle = self._handle(wid)
+                    if desc:
+                        winner_line = (
+                            f"{handle} takes it with {desc.lower()}, "
+                            f"{_format_chips(amount)}."
+                        )
+                    else:
+                        # No description = fold-win
+                        winner_line = f"{handle} scoops {_format_chips(amount)}."
+                else:
+                    names = " and ".join(self._handle(_winner_id(w)) for w in winners)
+                    desc = _winner_desc(winners[0])
+                    if desc:
+                        winner_line = f"{names} chop the pot with {desc.lower()}."
+                    else:
+                        winner_line = f"{names} chop the pot."
+        else:
+            winner_line = "Multiple pots split among the winners."
+
+        return _join_sentences(*reveal_lines, winner_line)
 
     # -----------------------------------------------------------------------
     # Action narration — the meat

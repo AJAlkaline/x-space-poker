@@ -227,3 +227,138 @@ def test_seats_broadcast_after_each_join(client: TestClient) -> None:
         # Now hand_started should be next.
         bob_started = _drain_until(ws_b, ["hand_started"])
         assert bob_started["state"]["pot_total"] == 15
+
+
+def test_hand_complete_includes_pot_distributions(client: TestClient) -> None:
+    """hand_complete carries pot_distributions describing who won each pot,
+    with hand description and best-five for showdown winners."""
+    res = client.post(
+        "/api/tables", params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+
+    with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+         client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+        for who, seat in [("alice", 0), ("bob", 1)]:
+            client.post(
+                "/api/tables/join", params={"as": who},
+                json={"code": code, "seat": seat, "buy_in": 1000},
+            )
+        _drain_until(ws_a, ["hand_started"])
+        _drain_until(ws_b, ["hand_started"])
+
+        # Alice (button heads-up) folds. Bob wins by fold, not showdown.
+        priv = _drain_until(ws_a, ["private"])
+        assert priv["state"]["your_turn"] is True
+        ws_a.send_json({"type": "action", "action": "fold"})
+
+        complete = _drain_until(ws_a, ["hand_complete"])
+        assert "pot_distributions" in complete
+        dists = complete["pot_distributions"]
+        assert len(dists) == 1
+        # The pot.amount field is the matched committed chips (alice's 5 SB
+        # matched against 5 of bob's 10 BB = 10 matched; bob's other 5 is
+        # refunded as uncalled). So pot is 10, not 15.
+        assert dists[0]["amount"] == 10
+        winners = dists[0]["winners"]
+        assert len(winners) == 1
+        assert winners[0]["player_id"] == "bob"
+        # Fold-win has no showdown — empty hand description and best_five.
+        assert winners[0]["hand_description"] == ""
+        assert winners[0]["best_five"] == []
+
+
+def test_players_have_position_labels(client: TestClient) -> None:
+    """At hand_started, each player has a `position` label like BTN/BB/UTG."""
+    res = client.post(
+        "/api/tables", params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+
+    with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+         client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+        for who, seat in [("alice", 0), ("bob", 1)]:
+            client.post(
+                "/api/tables/join", params={"as": who},
+                json={"code": code, "seat": seat, "buy_in": 1000},
+            )
+        started = _drain_until(ws_a, ["hand_started"])
+        _drain_until(ws_b, ["hand_started"])
+
+        positions = {
+            p["id"]: p.get("position")
+            for p in started["state"]["players"]
+            if p is not None
+        }
+        # Heads-up: button player is BTN (also posts SB), the other is BB.
+        # Alice has seat 0 — depending on button placement she's BTN or BB.
+        # We just verify both are populated and one of each kind.
+        labels = set(positions.values())
+        assert "BTN" in labels
+        assert "BB" in labels
+
+
+def test_showdown_emits_hand_description_and_best_five(client: TestClient) -> None:
+    """When a hand goes to showdown, pot_distributions winners carry both
+    a hand description and the 5 cards that make up the winning hand."""
+    res = client.post(
+        "/api/tables", params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+
+    with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+         client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+        for who, seat in [("alice", 0), ("bob", 1)]:
+            client.post(
+                "/api/tables/join", params={"as": who},
+                json={"code": code, "seat": seat, "buy_in": 1000},
+            )
+        _drain_until(ws_a, ["hand_started"])
+        _drain_until(ws_b, ["hand_started"])
+
+        # Both players just check/call through to showdown. Pump messages
+        # from both sockets, acting whenever it's my turn. Bail when either
+        # socket reports hand_complete.
+        sockets = {"alice": ws_a, "bob": ws_b}
+        complete: dict | None = None
+        # Limit total iterations to avoid hanging.
+        for _ in range(200):
+            for _handle, ws in sockets.items():
+                # Non-blocking poll: try to receive one message.
+                msg = ws.receive_json()
+                t = msg.get("type")
+                if t == "hand_complete":
+                    complete = msg
+                    break
+                if t == "private" and msg["state"]["your_turn"]:
+                    # Pick the lowest-cost legal action: check, call, or fold.
+                    legals = [la["action_type"] for la in msg["state"]["legal_actions"]]
+                    if "check" in legals:
+                        ws.send_json({"type": "action", "action": "check"})
+                    elif "call" in legals:
+                        ws.send_json({"type": "action", "action": "call"})
+                    else:
+                        # Shouldn't happen if we're calling/checking
+                        ws.send_json({"type": "action", "action": "fold"})
+            if complete:
+                break
+
+        assert complete is not None, "never reached hand_complete"
+        dists = complete.get("pot_distributions", [])
+        assert len(dists) == 1
+        assert dists[0]["amount"] > 0
+        winners = dists[0]["winners"]
+        assert len(winners) >= 1
+
+        # At least one winner has a hand description.
+        # The winner has exactly 5 cards in best_five.
+        for w in winners:
+            assert w["hand_description"], (
+                f"showdown winner should have non-empty description: {w}"
+            )
+            assert len(w["best_five"]) == 5, (
+                f"best_five should be exactly 5 cards: {w}"
+            )

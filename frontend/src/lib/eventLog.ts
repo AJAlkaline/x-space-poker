@@ -15,6 +15,7 @@
  */
 import type {
   ActionInfo,
+  PotDistribution,
   PublicPlayer,
   PublicState,
   SeatInfo,
@@ -87,9 +88,16 @@ function formatBoard(cards: string[]): string {
 // Player lookup helpers
 // ---------------------------------------------------------------------------
 
-function playerLabel(_state: PublicState | null, playerId: string): string {
-  // For now players are addressed by handle. If we ever add display names,
-  // resolve them here. The "@" prefix matches the header style.
+function playerLabel(state: PublicState | null, playerId: string): string {
+  // Format: "POS @handle" when the player has a position label on the
+  // current state, "@handle" otherwise. Position is hand-scoped — between
+  // hands or for spectators viewing a non-active table, position may be
+  // missing and we fall back to just the handle.
+  const player = findPlayer(state, playerId);
+  const position = player?.position;
+  if (position) {
+    return `${position} @${playerId}`;
+  }
   return `@${playerId}`;
 }
 
@@ -215,26 +223,73 @@ function narrateSeatDiff(
   return lines;
 }
 
-/** Build the showdown summary from a hand_complete state's revealed holes
- *  and any players still in the hand. */
-function narrateHandComplete(state: PublicState): string {
-  const inHand = state.players.filter(
-    (p): p is PublicPlayer =>
-      p !== null && (p.status === "active" || p.status === "all_in"),
-  );
-  if (inHand.length === 1) {
-    return `@${inHand[0].id} wins ${state.pot_total}: everyone else folded.`;
+/** Build the hand-complete summary. When pot_distributions are provided
+ *  (the modern wire format), we narrate each pot with the winner's hand
+ *  description. For fold-wins (everyone else folded), we keep the original
+ *  "everyone else folded" framing. */
+function narrateHandComplete(
+  state: PublicState,
+  distributions: PotDistribution[],
+): string[] {
+  // No distributions (defensive — server should always populate). Fall
+  // back to the old behavior.
+  if (!distributions || distributions.length === 0) {
+    const inHand = state.players.filter(
+      (p): p is PublicPlayer =>
+        p !== null && (p.status === "active" || p.status === "all_in"),
+    );
+    if (inHand.length === 1) {
+      return [`@${inHand[0].id} wins ${state.pot_total}: everyone else folded.`];
+    }
+    return [`Hand complete. Pot: ${state.pot_total}.`];
   }
-  // Multi-way: list revealed hands. The engine's pot distributions aren't
-  // populated yet (TODO in events.py), so we just announce who's still in.
-  const revealed = inHand
-    .filter((p) => p.hole && p.hole.length === 2)
-    .map((p) => `@${p.id} (${p.hole!.map(formatCard).join(" ")})`)
-    .join(", ");
-  if (revealed) {
-    return `Showdown: ${revealed}. Pot: ${state.pot_total}.`;
+
+  const lines: string[] = [];
+  const isFoldWin =
+    distributions.length === 1 &&
+    distributions[0].winners.length === 1 &&
+    distributions[0].winners[0].hand_description === "";
+
+  if (isFoldWin) {
+    const w = distributions[0].winners[0];
+    lines.push(
+      `@${w.player_id} wins ${distributions[0].amount}: everyone else folded.`,
+    );
+    return lines;
   }
-  return `Hand complete. Pot: ${state.pot_total}.`;
+
+  // Showdown — narrate each pot. For a single main pot the common case
+  // reads cleanly as "Showdown. @alice wins 280 with Two Pair, Kings and
+  // Fours." For side pots we prefix with "Side pot X:".
+  const labelFor = (i: number, n: number): string => {
+    if (n === 1) return "";
+    if (i === 0) return "Main pot: ";
+    if (n === 2) return "Side pot: ";
+    return `Side pot ${i}: `;
+  };
+
+  for (let i = 0; i < distributions.length; i++) {
+    const d = distributions[i];
+    if (d.winners.length === 0) continue; // unfunded / no eligible winners
+    const prefix = labelFor(i, distributions.length);
+    if (d.winners.length === 1) {
+      const w = d.winners[0];
+      const handPart = w.hand_description ? ` with ${w.hand_description}` : "";
+      lines.push(`${prefix}@${w.player_id} wins ${d.amount}${handPart}.`);
+    } else {
+      // Chop.
+      const names = d.winners.map((w) => `@${w.player_id}`).join(", ");
+      const desc = d.winners[0].hand_description;
+      const each = Math.floor(d.amount / d.winners.length);
+      lines.push(
+        `${prefix}${names} split ${d.amount} (${each} each)` +
+          (desc ? ` with ${desc}` : "") +
+          ".",
+      );
+    }
+  }
+
+  return lines;
 }
 
 // ---------------------------------------------------------------------------
@@ -296,10 +351,24 @@ export function applyMessage(
       if (phaseLine) {
         pending.push({ level: "info", text: phaseLine });
       }
-      pending.push({
-        level: "info",
-        text: narrateHandComplete(state),
-      });
+      // Optional showdown reveal line for multi-way pots — list who's still
+      // in with their hole cards, before we announce winners.
+      const inHand = state.players.filter(
+        (p): p is PublicPlayer =>
+          p !== null && (p.status === "active" || p.status === "all_in"),
+      );
+      if (inHand.length >= 2) {
+        const revealed = inHand
+          .filter((p) => p.hole && p.hole.length === 2)
+          .map((p) => `@${p.id} (${p.hole!.map(formatCard).join(" ")})`)
+          .join(", ");
+        if (revealed) {
+          pending.push({ level: "info", text: `Showdown: ${revealed}.` });
+        }
+      }
+      for (const line of narrateHandComplete(state, msg.pot_distributions ?? [])) {
+        pending.push({ level: "info", text: line });
+      }
       lastPublicState = state;
       break;
     }

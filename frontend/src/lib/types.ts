@@ -30,12 +30,28 @@ export interface PublicPlayer {
   street_committed: number;
   total_committed: number;
   last_action: ActionType | null;
+  /** Position label: BTN, SB, BB, UTG, UTG+1, MP, LJ, HJ, CO. May be null
+   *  during state transitions (e.g. between hands). */
+  position: string | null;
   hole: string[] | null;
 }
 
 export interface PublicPot {
   amount: number;
   eligible: string[];
+}
+
+export interface PotDistributionWinner {
+  player_id: string;
+  /** "Two Pair, Aces and Kings" — empty string for fold-wins (no showdown). */
+  hand_description: string;
+  /** The 5 cards that compose the winning hand. Empty for fold-wins. */
+  best_five: string[];
+}
+
+export interface PotDistribution {
+  amount: number;
+  winners: PotDistributionWinner[];
 }
 
 export interface PublicState {
@@ -80,7 +96,7 @@ export interface SeatInfo {
 export type ServerMessage =
   | { type: "hand_started"; state: PublicState }
   | { type: "state_update"; state: PublicState; action?: ActionInfo }
-  | { type: "hand_complete"; state: PublicState }
+  | { type: "hand_complete"; state: PublicState; pot_distributions: PotDistribution[] }
   | { type: "hand_aborted"; hand_id: string; refunds: Record<string, number> }
   | { type: "private"; state: PrivateState }
   | { type: "seats"; seats: (SeatInfo | null)[] }

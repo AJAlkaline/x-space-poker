@@ -28,6 +28,7 @@ from app.engine import (
     HandPhase,
     PlayerStatus,
 )
+from app.engine.evaluator import evaluate_hand
 from app.engine.table import (
     SeatConfig,
     apply_action,
@@ -612,7 +613,7 @@ class TableManager:
                     hand_id=rt.current_state.hand_id,
                     deck_reveal=rt.current_deck.reveal() if rt.current_deck else "",
                     public_state=_public_view(rt.current_state, reveal=True),
-                    pot_distributions=[],  # TODO populate from final state
+                    pot_distributions=_compute_pot_distributions(rt.current_state),
                 ))
 
                 # Update seats from final stacks + bust handling.
@@ -694,8 +695,155 @@ def _next_button(rt: TableRuntime) -> int:
     return after[0] if after else occupied[0]
 
 
+def _compute_pot_distributions(state: GameState) -> list[dict]:
+    """Derive pot distributions from a hand-complete state.
+
+    The engine resolves pots internally during `_resolve_hand` but doesn't
+    expose the per-pot winner+score data structurally. We recompute it
+    here from the final state: pots are already on `state.pots`, hole
+    cards are still attached to in-hand players, and the board is on
+    state.board.
+
+    Two cases:
+    - **Folded out**: exactly one player is still in (everyone else folded
+      pre-showdown). That player wins every pot. No hand description
+      (hole cards may not even be revealed publicly).
+    - **Showdown**: 2+ players in. Evaluate each in-hand player's best
+      hand, then for each pot pick winners by lowest score.
+
+    The output mirrors what the wire format needs:
+        [
+          {
+            "amount": int,
+            "winners": [
+              {"player_id": str, "hand_description": str,
+               "best_five": [card_strs]}
+            ],
+          },
+          ...
+        ]
+    """
+    in_hand = [
+        p for p in state.players
+        if p is not None and p.status in (PlayerStatus.ACTIVE, PlayerStatus.ALL_IN)
+    ]
+    if not in_hand:
+        return []
+
+    # Case 1: single winner (everyone else folded). No need to evaluate;
+    # the winner takes every pot regardless of cards.
+    if len(in_hand) == 1:
+        winner = in_hand[0]
+        return [
+            {
+                "amount": pot.amount,
+                "winners": [
+                    {
+                        "player_id": winner.id,
+                        "hand_description": "",  # no showdown
+                        "best_five": [],
+                    },
+                ],
+            }
+            for pot in state.pots if pot.amount > 0
+        ]
+
+    # Case 2: showdown — evaluate all in-hand hands.
+    strengths = {}
+    for p in in_hand:
+        if p.hole and len(state.board) >= 3:
+            # Not enough cards shouldn't happen at hand-complete time but
+            # guard defensively in case state is malformed.
+            with contextlib.suppress(ValueError):
+                strengths[p.id] = evaluate_hand(list(p.hole), list(state.board))
+
+    distributions: list[dict] = []
+    for pot in state.pots:
+        if pot.amount <= 0:
+            continue
+        eligible = [pid for pid in pot.eligible_players if pid in strengths]
+        if not eligible:
+            distributions.append({"amount": pot.amount, "winners": []})
+            continue
+        best = min(strengths[pid].score for pid in eligible)
+        winner_ids = [pid for pid in eligible if strengths[pid].score == best]
+        distributions.append({
+            "amount": pot.amount,
+            "winners": [
+                {
+                    "player_id": pid,
+                    "hand_description": strengths[pid].description,
+                    "best_five": [str(c) for c in strengths[pid].best_five],
+                }
+                for pid in winner_ids
+            ],
+        })
+    return distributions
+
+
+def _compute_positions(state: GameState) -> dict[str, str]:
+    """Return a {player_id: position_label} map for the given state.
+
+    Positions are derived from the button seat plus the active player set.
+    We label by clockwise distance from the button, using standard poker
+    abbreviations:
+
+    - 2 players (heads-up): BTN (which is also SB), BB
+    - 3 players: BTN, SB, BB
+    - 4: BTN, SB, BB, UTG (which is also CO)
+    - 5: BTN, SB, BB, UTG, CO
+    - 6: BTN, SB, BB, UTG, HJ, CO
+    - 7: BTN, SB, BB, UTG, MP, HJ, CO
+    - 8: BTN, SB, BB, UTG, UTG+1, MP, HJ, CO
+    - 9: BTN, SB, BB, UTG, UTG+1, MP, LJ, HJ, CO
+
+    The labels start at BTN at distance 0 and walk clockwise (increasing
+    seat distance) through SB, BB, then through "early" positions toward CO.
+    The middle labels expand as table size grows.
+    """
+    # Players in the hand (button-sorted, clockwise from button).
+    n = len(state.players)
+    in_seats = [(i, p) for i, p in enumerate(state.players) if p is not None]
+    if not in_seats:
+        return {}
+
+    # Walk clockwise from button. Collect occupied seats in order.
+    ordered: list = []  # player objects in clockwise order starting at button
+    for offset in range(n):
+        seat = (state.button + offset) % n
+        for idx, p in in_seats:
+            if idx == seat:
+                ordered.append(p)
+                break
+
+    count = len(ordered)
+    if count == 0:
+        return {}
+
+    labels: list[str]
+    if count == 2:
+        labels = ["BTN", "BB"]  # heads-up: BTN posts SB
+    elif count == 3:
+        labels = ["BTN", "SB", "BB"]
+    elif count == 4:
+        labels = ["BTN", "SB", "BB", "UTG"]
+    elif count == 5:
+        labels = ["BTN", "SB", "BB", "UTG", "CO"]
+    elif count == 6:
+        labels = ["BTN", "SB", "BB", "UTG", "HJ", "CO"]
+    elif count == 7:
+        labels = ["BTN", "SB", "BB", "UTG", "MP", "HJ", "CO"]
+    elif count == 8:
+        labels = ["BTN", "SB", "BB", "UTG", "UTG+1", "MP", "HJ", "CO"]
+    else:  # 9
+        labels = ["BTN", "SB", "BB", "UTG", "UTG+1", "MP", "LJ", "HJ", "CO"]
+
+    return {p.id: labels[i] for i, p in enumerate(ordered) if i < len(labels)}
+
+
 def _public_view(state: GameState, reveal: bool = False) -> dict:
     pot_total = sum(p.total_committed for p in state.players if p is not None)
+    positions = _compute_positions(state)
     return {
         "hand_id": state.hand_id,
         "phase": state.phase.value,
@@ -720,6 +868,7 @@ def _public_view(state: GameState, reveal: bool = False) -> dict:
                 "street_committed": p.street_committed,
                 "total_committed": p.total_committed,
                 "last_action": p.last_action.value if p.last_action else None,
+                "position": positions.get(p.id),
                 "hole": (
                     [str(c) for c in p.hole]
                     if reveal and p.status != PlayerStatus.FOLDED and p.hole

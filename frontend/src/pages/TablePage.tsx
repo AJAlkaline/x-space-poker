@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useSession as useHandle } from "../lib/useSession";
 import { useTableSocket } from "../lib/useTableSocket";
 import type {
+  PotDistribution,
   PrivateState,
   PublicState,
   SeatInfo,
@@ -33,6 +34,13 @@ export function TablePage() {
   const [error, setError] = useState<string | null>(null);
   const [joinPending, setJoinPending] = useState(false);
   const [logState, setLogState] = useState<EventLogState>(emptyLogState);
+  // Most recent hand's pot distributions. Lives through the inter-hand pause
+  // so winners and winning cards stay highlighted until the next deal.
+  const [potDistributions, setPotDistributions] =
+    useState<PotDistribution[] | null>(null);
+  // Track the seat the player most recently occupied. When they bust out,
+  // we use this to offer a one-click "Buy back in" at the same seat.
+  const lastSeatRef = useRef<number | null>(null);
 
   const handleMessage = useCallback(
     (msg: ServerMessage) => {
@@ -45,16 +53,22 @@ export function TablePage() {
         case "hand_started":
           setPublicState(msg.state);
           setPrivateState(null);
+          setPotDistributions(null);  // clear any previous-hand highlights
           setError(null);
           break;
         case "state_update":
+          setPublicState(msg.state);
+          setError(null);
+          break;
         case "hand_complete":
           setPublicState(msg.state);
+          setPotDistributions(msg.pot_distributions ?? []);
           setError(null);
           break;
         case "hand_aborted":
           setPublicState(null);
           setPrivateState(null);
+          setPotDistributions(null);
           break;
         case "private":
           setPrivateState(msg.state);
@@ -87,6 +101,29 @@ export function TablePage() {
   const inPublic =
     publicState?.players.some((p) => p != null && p.id === handle) ?? false;
   const seated = inSeats || inPublic;
+
+  // Remember the most recent seat I occupied so we can offer a one-click
+  // "Buy back in" at the same seat after busting. Updates whenever seated
+  // transitions to true.
+  useEffect(() => {
+    if (seated && handle) {
+      const mySeat = seats.findIndex((s) => s != null && s.user_id === handle);
+      if (mySeat >= 0) lastSeatRef.current = mySeat;
+      else {
+        // Fall back to public state if seats snapshot hasn't caught up.
+        const inPub = publicState?.players.find((p) => p != null && p.id === handle);
+        if (inPub) lastSeatRef.current = inPub.seat;
+      }
+    }
+  }, [seated, seats, publicState, handle]);
+
+  // Has the player previously occupied a seat and is now busted/unseated?
+  // Differentiate "first arrival" from "I just lost my chips" so we can
+  // show a re-buy CTA instead of forcing them through the full seat picker.
+  const previousSeat = lastSeatRef.current;
+  const seatStillOpen =
+    previousSeat !== null && previousSeat < MAX_SEATS && seats[previousSeat] == null;
+  const offerRebuy = !seated && previousSeat !== null && seatStillOpen;
 
   // Clear private state if I'm not seated (e.g. after busting out).
   useEffect(() => {
@@ -158,7 +195,22 @@ export function TablePage() {
         </div>
       )}
 
-      {!seated && (
+      {!seated && offerRebuy && (
+        <RebuyCTA
+          seatNumber={previousSeat!}
+          buyIn={DEFAULT_BUY_IN}
+          onRebuy={() => join(previousSeat!)}
+          onPickOtherSeat={() => {
+            // Clear the previous seat memory so the full picker shows.
+            lastSeatRef.current = null;
+            // Force re-render — touch a state that re-evaluates the CTA gate.
+            setError(null);
+          }}
+          disabled={joinPending || status !== "open"}
+        />
+      )}
+
+      {!seated && !offerRebuy && (
         <SeatPicker
           seats={seats}
           maxSeats={MAX_SEATS}
@@ -167,7 +219,11 @@ export function TablePage() {
         />
       )}
 
-      <TableView publicState={publicState} seats={seats} />
+      <TableView
+        publicState={publicState}
+        seats={seats}
+        potDistributions={potDistributions}
+      />
 
       {seated && <HoleCards privateState={privateState} />}
 
@@ -390,6 +446,69 @@ function formatTimestamp(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+function RebuyCTA({
+  seatNumber,
+  buyIn,
+  onRebuy,
+  onPickOtherSeat,
+  disabled,
+}: {
+  seatNumber: number;
+  buyIn: number;
+  onRebuy: () => void;
+  onPickOtherSeat: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <div
+      style={{
+        padding: "1rem",
+        border: "1px solid #c89c3a",
+        background: "#2a230f",
+        borderRadius: 8,
+        display: "grid",
+        gap: "0.6rem",
+      }}
+    >
+      <div style={{ fontWeight: 600 }}>You're out of chips at this table.</div>
+      <div style={{ opacity: 0.75, fontSize: "0.85rem" }}>
+        Buy back in for {buyIn} chips at seat {seatNumber + 1}, or pick a different seat.
+      </div>
+      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+        <button
+          onClick={onRebuy}
+          disabled={disabled}
+          style={{
+            padding: "0.5rem 1rem",
+            background: "#c89c3a",
+            color: "#000",
+            border: 0,
+            borderRadius: 6,
+            fontWeight: 600,
+            cursor: disabled ? "not-allowed" : "pointer",
+          }}
+        >
+          Buy back in (seat {seatNumber + 1})
+        </button>
+        <button
+          onClick={onPickOtherSeat}
+          disabled={disabled}
+          style={{
+            padding: "0.5rem 1rem",
+            background: "transparent",
+            color: "inherit",
+            border: "1px solid #2a2e36",
+            borderRadius: 6,
+            cursor: disabled ? "not-allowed" : "pointer",
+          }}
+        >
+          Pick a different seat
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function SeatPicker({

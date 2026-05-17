@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
 
-from app.api import auth, tables, ws
+from app.api import audio, auth, tables, ws
 from app.core.config import get_settings
 
 log = logging.getLogger(__name__)
@@ -87,6 +87,7 @@ def create_app() -> FastAPI:
     # because /ws/* is a long-standing WebSocket convention.
     app.include_router(auth.router, prefix="/auth", tags=["auth"])
     app.include_router(tables.router, prefix="/api/tables", tags=["tables"])
+    app.include_router(audio.router, prefix="/api/audio", tags=["audio"])
     app.include_router(ws.router)
 
     @app.get("/api/health")

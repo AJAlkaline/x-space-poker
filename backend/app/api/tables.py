@@ -30,11 +30,21 @@ class CreateTableRequest(BaseModel):
     small_blind: int = Field(default=5, gt=0)
     big_blind: int = Field(default=10, gt=0)
     max_seats: int = Field(default=9, ge=2, le=9)
+    narration_enabled: bool = Field(
+        default=False,
+        description=(
+            "If true, the server spawns a TTS narrator that broadcasts "
+            "spoken commentary on this table's audio stream. Requires "
+            "ELEVENLABS_API_KEY to be set server-side to actually produce "
+            "audio; otherwise the narrator runs but emits silent clips."
+        ),
+    )
 
 
 class CreateTableResponse(BaseModel):
     table_id: str
     code: str
+    narration_enabled: bool = False
 
 
 @router.post("", response_model=CreateTableResponse)
@@ -49,6 +59,7 @@ async def create_table(
         small_blind=req.small_blind,
         big_blind=req.big_blind,
         max_seats=req.max_seats,
+        narration_enabled=req.narration_enabled,
     )
     if get_settings().persistence_enabled:
         async with get_session() as s:
@@ -58,7 +69,10 @@ async def create_table(
                 small_blind=req.small_blind, big_blind=req.big_blind,
                 max_seats=req.max_seats, host_user_id=account.user_id,
             )
-    return CreateTableResponse(table_id=str(table_id), code=rt.code)
+    return CreateTableResponse(
+        table_id=str(table_id), code=rt.code,
+        narration_enabled=req.narration_enabled,
+    )
 
 
 class JoinTableRequest(BaseModel):

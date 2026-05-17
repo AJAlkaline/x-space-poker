@@ -6,6 +6,7 @@ import { TablePage } from "./pages/TablePage";
 import { LobbyPage } from "./pages/LobbyPage";
 import { SpectatePage } from "./pages/SpectatePage";
 import { ReplayPage } from "./pages/ReplayPage";
+import { AudioPage } from "./pages/AudioPage";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -17,6 +18,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="table/:code" element={<TablePage />} />
           <Route path="spectate/:code" element={<SpectatePage />} />
           <Route path="replay/:hand_id" element={<ReplayPage />} />
+          <Route path="audio/:code" element={<AudioPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

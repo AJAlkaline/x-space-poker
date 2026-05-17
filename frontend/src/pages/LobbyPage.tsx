@@ -7,6 +7,7 @@ export function LobbyPage() {
   const { handle } = useHandle();
   const [joinCode, setJoinCode] = useState("");
   const [creating, setCreating] = useState(false);
+  const [narrationEnabled, setNarrationEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleJoin = (e: React.FormEvent) => {
@@ -25,7 +26,12 @@ export function LobbyPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ small_blind: 5, big_blind: 10, max_seats: 9 }),
+        body: JSON.stringify({
+          small_blind: 5,
+          big_blind: 10,
+          max_seats: 9,
+          narration_enabled: narrationEnabled,
+        }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as { table_id: string; code: string };
@@ -84,6 +90,31 @@ export function LobbyPage() {
         <p style={{ opacity: 0.7, fontSize: "0.9rem" }}>
           Creates a 5/10 NL Hold'em cash table with a shareable code.
         </p>
+        <label
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            alignItems: "flex-start",
+            margin: "0.75rem 0",
+            cursor: "pointer",
+            fontSize: "0.9rem",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={narrationEnabled}
+            onChange={(e) => setNarrationEnabled(e.target.checked)}
+            style={{ marginTop: 4 }}
+          />
+          <span>
+            <strong>AI narration</strong>
+            <div style={{ opacity: 0.65, fontSize: "0.8rem", marginTop: 2 }}>
+              Generates spoken commentary on the action. Audio stream is
+              accessible at <code>/audio/{`<code>`}</code> for spectators or
+              for broadcast to X Spaces via OBS.
+            </div>
+          </span>
+        </label>
         <button onClick={handleCreate} disabled={creating}>
           {creating ? "Creating..." : "Create table"}
         </button>

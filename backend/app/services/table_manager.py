@@ -104,6 +104,7 @@ class TableRuntime:
     bus: EventBus = field(default_factory=EventBus)
     closed: asyncio.Event = field(default_factory=asyncio.Event)
     seats_changed: asyncio.Event = field(default_factory=asyncio.Event)
+    narration_enabled: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +134,7 @@ class TableManager:
     async def create_table(
         self, table_id: str, small_blind: int, big_blind: int,
         max_seats: int = 9, code: str | None = None,
+        narration_enabled: bool = False,
     ) -> TableRuntime:
         if code is None:
             for _ in range(10):
@@ -151,6 +153,7 @@ class TableManager:
                 big_blind=big_blind, max_seats=max_seats,
             ),
         )
+        rt.narration_enabled = narration_enabled
         self._tables[table_id] = rt
         self._codes[code] = table_id
         self._tasks[table_id] = asyncio.create_task(
@@ -166,6 +169,20 @@ class TableManager:
                     rt.bus, f"persistence:{table_id}", rt.closed,
                 ),
                 name=f"persistence-{code}",
+            )
+        # If narration is requested, spawn the narrator consumer that
+        # produces commentary audio on the AudioBus.
+        if narration_enabled:
+            from app.services.audio_bus import get_audio_bus
+            from app.services.narrator_consumer import run_narrator_consumer
+            from app.services.tts import get_tts_service
+            tts = await get_tts_service()
+            audio_bus = get_audio_bus()
+            self._tasks[f"{table_id}:narrator"] = asyncio.create_task(
+                run_narrator_consumer(
+                    rt.bus, table_id, audio_bus, tts, rt.closed,
+                ),
+                name=f"narrator-{code}",
             )
         return rt
 

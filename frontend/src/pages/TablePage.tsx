@@ -125,6 +125,7 @@ export function TablePage() {
       >
         <h2 style={{ margin: 0 }}>Table {code}</h2>
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <NarrationLink code={code ?? ""} />
           {viewerCount > 0 && (
             <span
               style={{
@@ -183,6 +184,73 @@ export function TablePage() {
 
       <RecentHands code={code ?? ""} />
     </div>
+  );
+}
+
+interface AudioStatus {
+  narration_enabled: boolean;
+  listener_count: number;
+  tts_configured: boolean;
+}
+
+function NarrationLink({ code }: { code: string }) {
+  const [status, setStatus] = useState<AudioStatus | null>(null);
+
+  useEffect(() => {
+    if (!code) return;
+    let cancelled = false;
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch(`/api/audio/${encodeURIComponent(code)}/status`);
+        if (cancelled) return;
+        if (res.ok) {
+          setStatus(await res.json());
+        } else {
+          // 404 = table doesn't exist or narration not enabled. Either way,
+          // don't render.
+          setStatus(null);
+        }
+      } catch {
+        // Network error — fail silent, the link isn't critical.
+        setStatus(null);
+      }
+    };
+    fetchStatus();
+    // Refresh occasionally so the listener count stays roughly fresh.
+    const id = window.setInterval(fetchStatus, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [code]);
+
+  if (!status?.narration_enabled) return null;
+
+  const title = status.tts_configured
+    ? `Live AI commentary. ${status.listener_count} listening.`
+    : "AI commentary enabled (text only — TTS not configured on server).";
+
+  return (
+    <Link
+      to={`/audio/${code}`}
+      title={title}
+      style={{
+        fontSize: "0.8rem",
+        padding: "0.2rem 0.6rem",
+        background: status.tts_configured ? "#1a3a30" : "#332f1a",
+        border: `1px solid ${status.tts_configured ? "#2a4d3f" : "#665a2a"}`,
+        borderRadius: 999,
+        textDecoration: "none",
+        color: "inherit",
+      }}
+    >
+      🔊 narration
+      {status.listener_count > 0 && (
+        <span style={{ marginLeft: "0.35rem", opacity: 0.7 }}>
+          · {status.listener_count}
+        </span>
+      )}
+    </Link>
   );
 }
 

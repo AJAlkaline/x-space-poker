@@ -116,7 +116,7 @@ class TestTableAudioStream:
         # Subscribe manually so we can not-read.
         # Hack the queue size to be tiny so we can fill it.
         q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=2)
-        stream._subscribers.add(q)
+        stream._byte_subscribers.add(q)
         try:
             # Publish more than the queue can hold.
             for i in range(10):
@@ -124,7 +124,7 @@ class TestTableAudioStream:
             # Only 2 should be queued; the rest dropped.
             assert q.qsize() == 2
         finally:
-            stream._subscribers.discard(q)
+            stream._byte_subscribers.discard(q)
 
     def test_transcript_recorded(self):
         stream = TableAudioStream("t1")
@@ -141,6 +141,86 @@ class TestTableAudioStream:
             stream.publish(b"a", text=f"line {i}")
         # Transcript is bounded to ~200 entries.
         assert len(stream.transcript) <= 200
+
+    @pytest.mark.asyncio
+    async def test_clip_subscribers_receive_publications(self):
+        stream = TableAudioStream("t1")
+        received = []
+
+        async def listener():
+            async for clip in stream.subscribe_clips():
+                received.append(clip)
+                if len(received) >= 2:
+                    break
+
+        task = asyncio.create_task(listener())
+        await asyncio.sleep(0.01)
+        stream.publish(b"audio_a", text="first")
+        stream.publish(b"audio_b", text="second")
+        await asyncio.wait_for(task, timeout=1.0)
+        assert len(received) == 2
+        assert received[0].audio == b"audio_a"
+        assert received[0].text == "first"
+        assert received[1].audio == b"audio_b"
+        assert received[1].text == "second"
+        # Sequence numbers monotonically increasing.
+        assert received[1].seq > received[0].seq
+
+    @pytest.mark.asyncio
+    async def test_clip_subscribers_get_empty_audio_too(self):
+        """When TTS fails, we publish empty audio. Clip subscribers still
+        receive the event so they can show transcript-only lines."""
+        stream = TableAudioStream("t1")
+        received = []
+
+        async def listener():
+            async for clip in stream.subscribe_clips():
+                received.append(clip)
+                if len(received) >= 1:
+                    break
+
+        task = asyncio.create_task(listener())
+        await asyncio.sleep(0.01)
+        stream.publish(b"", text="transcript without audio")
+        await asyncio.wait_for(task, timeout=1.0)
+        assert received[0].audio == b""
+        assert received[0].text == "transcript without audio"
+
+    @pytest.mark.asyncio
+    async def test_clip_subscribers_no_keepalive_silence(self):
+        """Unlike the byte-stream subscribers, clip subscribers only get
+        real publications, no silence keepalive frames."""
+        stream = TableAudioStream("t1")
+        received = []
+
+        async def listener():
+            try:
+                async with asyncio.timeout(1.5):
+                    async for clip in stream.subscribe_clips():
+                        received.append(clip)
+            except TimeoutError:
+                pass
+
+        task = asyncio.create_task(listener())
+        # Don't publish anything for 1.5s.
+        await asyncio.wait_for(task, timeout=2.5)
+        # No publications happened — listener should have received nothing.
+        assert received == []
+
+    @pytest.mark.asyncio
+    async def test_listener_count_includes_both_subscriber_kinds(self):
+        stream = TableAudioStream("t1")
+        # Spin up one of each.
+        byte_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=2)
+        from app.services.audio_bus import AudioClip  # noqa: F401
+        clip_q: asyncio.Queue = asyncio.Queue(maxsize=2)
+        stream._byte_subscribers.add(byte_q)
+        stream._clip_subscribers.add(clip_q)
+        try:
+            assert stream.listener_count == 2
+        finally:
+            stream._byte_subscribers.discard(byte_q)
+            stream._clip_subscribers.discard(clip_q)
 
 
 class TestAudioBus:

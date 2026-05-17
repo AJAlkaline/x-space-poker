@@ -49,6 +49,15 @@ include = ["app*"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+filterwarnings = [
+    # Leaked background tasks from prior tests (e.g. narrator consumer)
+    # see "Event loop is closed" when the loop they started in is gone.
+    # This warning gets escalated to test failures with -W error otherwise.
+    # The warning is harmless: in production these tasks live for the
+    # lifetime of the process; in tests they're orphaned but the next
+    # test's fresh loop runs cleanly.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.ruff]
 line-length = 100

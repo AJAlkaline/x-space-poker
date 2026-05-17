@@ -17,24 +17,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import app
-from app.services import audio_bus, table_manager, tts
-
-
-@pytest.fixture(autouse=True)
-def reset_singletons():
-    """Each test starts with fresh manager + audio bus + TTS singletons."""
-    yield
-    # Manager reset
-    table_manager._manager = None
-    # Audio bus reset (synchronous teardown is fine since tests await close)
-    audio_bus._bus = None
-    # TTS reset
-    tts._service = None
 
 
 @pytest.fixture
 def client():
-    # Make sure no API key leaks in from CI env
     os.environ.pop("ELEVENLABS_API_KEY", None)
     with TestClient(app) as c:
         yield c
@@ -152,3 +138,86 @@ class TestNarrationPipeline:
     def test_stream_404_for_unknown_table(self, client):
         res = client.get("/api/audio/NOTACODE/stream")
         assert res.status_code == 404
+
+    def test_ws_audio_delivers_clips(self, client):
+        """The new WS audio endpoint pushes individual clips with text
+        and base64 audio. This is the path the SPA listener uses to get
+        low-latency playback."""
+        res = client.post(
+            "/api/tables?as=alice",
+            json={"small_blind": 5, "big_blind": 10, "narration_enabled": True},
+        )
+        code = res.json()["code"]
+
+        import base64
+        import time as _t
+
+        # Open the WS audio channel.
+        with client.websocket_connect(f"/ws/audio/{code}") as ws_audio:
+            # Now drive a hand to trigger narration events.
+            with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+                 client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+                for who, seat in [("alice", 0), ("bob", 1)]:
+                    client.post(
+                        "/api/tables/join", params={"as": who},
+                        json={"code": code, "seat": seat, "buy_in": 1000},
+                    )
+                # Drain alice to her turn
+                for _ in range(15):
+                    msg = ws_a.receive_json()
+                    if msg.get("type") == "private" and msg["state"]["your_turn"]:
+                        break
+                ws_a.send_json({"type": "action", "action": "raise", "amount": 30})
+                # Drain bob to his turn
+                for _ in range(15):
+                    msg = ws_b.receive_json()
+                    if msg.get("type") == "private" and msg["state"]["your_turn"]:
+                        break
+                ws_b.send_json({"type": "action", "action": "fold"})
+                # Give the narrator consumer time to process events.
+                _t.sleep(0.5)
+
+            # Now read clips from the audio WS. With no TTS API key the
+            # audio_b64 will be empty, but we should see clip events for
+            # each narration line.
+            clips_received = []
+            for _ in range(20):
+                try:
+                    msg = ws_audio.receive_json()
+                    if msg.get("type") == "clip":
+                        clips_received.append(msg)
+                    if len(clips_received) >= 2:
+                        break
+                except Exception:
+                    break
+
+        assert len(clips_received) >= 1, "should have received at least one clip"
+        # Each clip has the expected shape.
+        for clip in clips_received:
+            assert "seq" in clip
+            assert "text" in clip
+            assert "audio_b64" in clip
+            # Without API key audio is empty.
+            assert base64.b64decode(clip["audio_b64"]) == b""
+
+    def test_ws_audio_404_for_unknown_table(self, client):
+        # Connecting to an unknown table closes the WS immediately.
+        from starlette.websockets import WebSocketDisconnect
+        with (
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect("/ws/audio/NOTACODE"),
+        ):
+            pass
+
+    def test_ws_audio_rejects_table_without_narration(self, client):
+        from starlette.websockets import WebSocketDisconnect
+        res = client.post(
+            "/api/tables?as=alice",
+            json={"small_blind": 5, "big_blind": 10, "narration_enabled": False},
+        )
+        code = res.json()["code"]
+        with (
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect(f"/ws/audio/{code}"),
+        ):
+            pass

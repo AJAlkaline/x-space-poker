@@ -29,6 +29,7 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -45,24 +46,61 @@ KEEPALIVE_INTERVAL_SEC = 0.5
 STREAM_IDLE_CLEANUP_SEC = 600.0  # GC streams with no listeners after 10 min
 
 
+@dataclass
+class AudioClip:
+    """One audio publication: the bytes and metadata needed to play it.
+
+    `published_at` is monotonic wall time when the clip was created on the
+    server. Clients can use this to compute age and drop clips that have
+    fallen too far behind the live action.
+
+    `text` is the narration text the audio renders. May be empty when the
+    clip is non-speech (or always empty if TTS failed — in that case the
+    audio bytes are zero-length but we still emit the clip so the client
+    can update its transcript).
+    """
+
+    audio: bytes
+    text: str
+    seq: int
+    published_at: float
+
+
 class TableAudioStream:
     """Audio state for a single table.
 
-    Holds the latest commentary clip and the set of active subscribers. When
-    new audio is published, every subscriber gets a copy on their queue. New
-    subscribers don't see past audio — they pick up at the next clip.
+    Holds the latest commentary clip and the set of active subscribers.
+    Two flavors of subscriber:
+
+    - **Byte-stream subscribers** (`subscribe()`): used by the HTTP
+      streaming endpoint. Receive raw MP3 bytes with periodic silence
+      keepalive frames so the connection stays open. Suitable for OBS,
+      VLC, or other consumers that prefer continuous audio. Browser audio
+      elements buffer this aggressively, so it's not great for live
+      latency.
+
+    - **Clip subscribers** (`subscribe_clips()`): each subscriber receives
+      one `AudioClip` per real audio publication, in order. No keepalive
+      silence. Suitable for clients that want to play clips one-shot with
+      minimal latency. The audio page uses this via WebSocket.
     """
 
     def __init__(self, table_id: str) -> None:
         self.table_id = table_id
-        self._subscribers: set[asyncio.Queue[bytes]] = set()
+        # Byte-stream subscribers — HTTP streaming consumers.
+        self._byte_subscribers: set[asyncio.Queue[bytes]] = set()
+        # Clip subscribers — WebSocket-based per-clip consumers.
+        self._clip_subscribers: set[asyncio.Queue[AudioClip]] = set()
         self._last_activity = time.monotonic()
         # Last text spoken — exposed for the transcript endpoint.
         self._transcript: list[tuple[float, str]] = []
+        # Monotonically increasing clip sequence number.
+        self._next_seq = 0
 
     @property
     def listener_count(self) -> int:
-        return len(self._subscribers)
+        """Total active listeners across both subscription modes."""
+        return len(self._byte_subscribers) + len(self._clip_subscribers)
 
     @property
     def last_activity(self) -> float:
@@ -73,37 +111,58 @@ class TableAudioStream:
         return list(self._transcript)
 
     def publish(self, audio: bytes, text: str = "") -> None:
-        """Broadcast audio to all current subscribers."""
-        self._last_activity = time.monotonic()
+        """Broadcast audio to all current subscribers (both flavors)."""
+        now = time.monotonic()
+        self._last_activity = now
         if text:
-            self._transcript.append((self._last_activity, text))
+            self._transcript.append((now, text))
             # Keep the transcript bounded.
             if len(self._transcript) > 200:
                 self._transcript = self._transcript[-200:]
+
+        # Always emit a clip event (even when audio is empty) so clip
+        # subscribers see transcript-only entries when TTS is disabled or
+        # failed. The client can decide whether to display them.
+        seq = self._next_seq
+        self._next_seq += 1
+        clip = AudioClip(audio=audio, text=text, seq=seq, published_at=now)
+        for q in list(self._clip_subscribers):
+            try:
+                q.put_nowait(clip)
+            except asyncio.QueueFull:
+                log.warning(
+                    "audio_bus: clip subscriber queue full for table %s; "
+                    "dropping clip seq=%d", self.table_id, seq,
+                )
+
+        # The byte-stream path only carries real audio (no point sending
+        # empty bytes; keepalive silence handles connection liveness).
         if not audio:
             return
-        for q in list(self._subscribers):
+        for q in list(self._byte_subscribers):
             try:
                 q.put_nowait(audio)
             except asyncio.QueueFull:
                 # Slow subscriber — drop this clip for them. Better than
                 # backing up the whole bus.
                 log.warning(
-                    "audio_bus: subscriber queue full for table %s; dropping clip",
-                    self.table_id,
+                    "audio_bus: byte subscriber queue full for table %s; "
+                    "dropping clip", self.table_id,
                 )
 
     async def subscribe(self) -> AsyncIterator[bytes]:
-        """Yield audio bytes for one listener until they disconnect.
+        """Yield raw MP3 bytes for one HTTP streaming listener.
 
-        Caller is responsible for calling this inside an async generator
-        consumed by an HTTP streaming response. When the caller stops
-        iterating (HTTP client disconnects), we clean up the subscriber.
+        Sends a silence keepalive frame every ~500ms when no real audio
+        is flowing. Caller is responsible for running this inside an
+        async generator consumed by an HTTP streaming response. When the
+        caller stops iterating (HTTP client disconnects), we clean up
+        the subscriber.
         """
         # Bounded queue to detect slow consumers. 32 clips = ~30 seconds
         # of commentary in flight.
         q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=32)
-        self._subscribers.add(q)
+        self._byte_subscribers.add(q)
         self._last_activity = time.monotonic()
         try:
             while True:
@@ -116,7 +175,24 @@ class TableAudioStream:
                 except TimeoutError:
                     yield _SILENT_MP3_FRAME
         finally:
-            self._subscribers.discard(q)
+            self._byte_subscribers.discard(q)
+
+    async def subscribe_clips(self) -> AsyncIterator[AudioClip]:
+        """Yield AudioClip objects, one per publication, in order.
+
+        No keepalive — silence between clips is just silence. Suitable
+        for clients that play each clip as a discrete one-shot rather
+        than buffering a continuous stream.
+        """
+        q: asyncio.Queue[AudioClip] = asyncio.Queue(maxsize=32)
+        self._clip_subscribers.add(q)
+        self._last_activity = time.monotonic()
+        try:
+            while True:
+                clip = await q.get()
+                yield clip
+        finally:
+            self._clip_subscribers.discard(q)
 
 
 class AudioBus:

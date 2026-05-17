@@ -192,7 +192,11 @@ class TableManager:
             return
         rt.closed.set()
         rt.seats_changed.set()
-        for key in (table_id, f"{table_id}:persistence"):
+        for key in (
+            table_id,
+            f"{table_id}:persistence",
+            f"{table_id}:narrator",
+        ):
             task = self._tasks.pop(key, None)
             if task:
                 task.cancel()
@@ -200,6 +204,11 @@ class TableManager:
                     await task
         self._codes.pop(rt.code, None)
         self._tables.pop(table_id, None)
+
+    async def shutdown_all(self) -> None:
+        """Close every active table. Used at app shutdown and in tests."""
+        for table_id in list(self._tables.keys()):
+            await self.close_table(table_id)
 
     # ---- Seats ----
 

@@ -86,6 +86,32 @@ class TestHandLifecycle:
         # Hand 2 should be silent (we don't announce every hand).
         assert text == ""
 
+    def test_milestone_hand_is_announced(self):
+        n = Narrator(seed=0)
+        # Walk through hands 1-9 silently.
+        n.on_hand_started(self._initial_state())  # 1: heads-up announce
+        for hn in range(2, 10):
+            n.on_hand_started({**self._initial_state(), "hand_number": hn})
+        # Hand 10 — milestone, should announce the number.
+        text = n.on_hand_started({**self._initial_state(), "hand_number": 10})
+        assert "10" in text
+        assert "hand number" in text.lower()
+
+    def test_no_spurious_hand_number_when_wire_field_missing(self):
+        """If hand_number is missing or zero in public_state (defensive
+        guard), narrator should NOT announce 'Hand number 0' every hand."""
+        n = Narrator(seed=0)
+        # First hand normal.
+        n.on_hand_started(self._initial_state())
+        # Subsequent hand with no hand_number — should be silent, not say "0".
+        state = {**self._initial_state()}
+        state.pop("hand_number", None)
+        text = n.on_hand_started(state)
+        assert text == ""
+        # And with explicit 0.
+        text = n.on_hand_started({**self._initial_state(), "hand_number": 0})
+        assert text == ""
+
     def test_fold_is_usually_silent(self):
         n = Narrator(seed=0)
         n.on_hand_started(self._initial_state())

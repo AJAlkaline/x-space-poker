@@ -194,8 +194,10 @@ class Narrator:
                 return "Heads up. Let's go."
             return f"{_count_phrase(n_players)} handed. Cards in the air."
 
-        # Periodic re-announcement of hand number, every 10 hands.
-        if self._hand.hand_number % 10 == 0:
+        # Periodic re-announcement of hand number, every 10 hands. Guard
+        # against hand_number=0 so a missing wire field doesn't trigger
+        # a "Hand number 0" line on every deal.
+        if self._hand.hand_number > 0 and self._hand.hand_number % 10 == 0:
             return f"Hand number {self._hand.hand_number}."
 
         # Otherwise stay silent on the deal.
@@ -208,29 +210,32 @@ class Narrator:
         amount = int(action_event.get("amount") or 0)
         auto = bool(action_event.get("auto"))
 
-        # Detect street advance — check the public_state's phase against ours.
+        # Detect street advance. The action we're about to narrate caused
+        # the phase to change (e.g. the BB's call ended pre-flop). We must
+        # narrate the action *first* — using the OLD phase context, since
+        # that's the context the action was made in — and only then
+        # announce the new street.
         new_phase = public_state.get("phase", self._hand.phase)
-        if new_phase != self._hand.phase:
+        phase_changed = new_phase != self._hand.phase
+
+        # Narrate the action under the current (pre-advance) phase.
+        action_text = self._narrate_action(
+            player_id, action_type, amount, auto, public_state,
+        )
+        self._record_action(player_id, action_type, amount, public_state)
+
+        if phase_changed:
+            # Now advance our internal phase and emit the street announce.
             self._hand.phase = new_phase
             self._hand.actions_this_street = []
             self._hand.raises_this_street = 0
             self._hand.last_raise_amount = 0
             self._hand.pot_at_street_start = int(public_state.get("pot_total") or 0)
-            # Phase advance produces its own commentary — the new board.
             board = public_state.get("board") or []
             phase_announce = self._announce_phase(new_phase, board)
-            # Then append the action commentary on the new street (if any).
-            action_text = self._narrate_action(
-                player_id, action_type, amount, auto, public_state,
-            )
-            self._record_action(player_id, action_type, amount, public_state)
-            return _join_sentences(phase_announce, action_text)
+            return _join_sentences(action_text, phase_announce)
 
-        text = self._narrate_action(
-            player_id, action_type, amount, auto, public_state,
-        )
-        self._record_action(player_id, action_type, amount, public_state)
-        return text
+        return action_text
 
     def on_hand_completed(
         self, public_state: dict, pot_distributions: list[dict],

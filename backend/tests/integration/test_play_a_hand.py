@@ -300,6 +300,29 @@ def test_players_have_position_labels(client: TestClient) -> None:
         assert "BB" in labels
 
 
+def test_hand_number_is_on_public_state(client: TestClient) -> None:
+    """The wire's `hand_started.state.hand_number` carries the session
+    hand counter — needed by the narrator to announce milestone hands
+    correctly. Regression: previously the field wasn't included on the
+    public_view dict, so the narrator always saw 0 and announced 'Hand
+    number 0' on every hand from #2 onwards."""
+    res = client.post(
+        "/api/tables", params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+    with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+         client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+        for who, seat in [("alice", 0), ("bob", 1)]:
+            client.post(
+                "/api/tables/join", params={"as": who},
+                json={"code": code, "seat": seat, "buy_in": 1000},
+            )
+        started = _drain_until(ws_a, ["hand_started"])
+        _drain_until(ws_b, ["hand_started"])
+        assert started["state"].get("hand_number") == 1
+
+
 def test_showdown_emits_hand_description_and_best_five(client: TestClient) -> None:
     """When a hand goes to showdown, pot_distributions winners carry both
     a hand description and the 5 cards that make up the winning hand."""

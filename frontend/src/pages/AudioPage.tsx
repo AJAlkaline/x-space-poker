@@ -106,32 +106,54 @@ export function AudioPage() {
     // Decode base64 → Blob → Object URL → Audio.
     try {
       const binary = atob(clip.audio_b64);
+      // Skip anything too small to be a real MP3 frame. Empty/near-empty
+      // blobs are the main source of transient Chromium "501" errors when
+      // the browser tries to range-request a blob URL it can't seek into.
+      // A valid Flash v2.5 clip is typically 1-5 KB minimum.
+      if (binary.length < 200) {
+        Promise.resolve().then(playNextClip);
+        return;
+      }
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       const blob = new Blob([bytes], { type: "audio/mpeg" });
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       playingNowRef.current = audio;
+      // Defer URL revocation: revoke once playback has fully stopped, not
+      // mid-decode. Chromium occasionally issues a second range-request
+      // for seek/buffer reasons after onended; revoking too eagerly is
+      // one path to spurious 501s.
+      let revoked = false;
+      const revokeOnce = () => {
+        if (!revoked) {
+          revoked = true;
+          // Small delay lets any in-flight range fetch complete cleanly.
+          window.setTimeout(() => URL.revokeObjectURL(url), 500);
+        }
+      };
       audio.onended = () => {
-        URL.revokeObjectURL(url);
         if (playingNowRef.current === audio) playingNowRef.current = null;
+        revokeOnce();
         playNextClip();
       };
       audio.onerror = () => {
-        URL.revokeObjectURL(url);
+        // Errors are usually transient (browser couldn't decode a frame,
+        // codec quirk, etc). The most common one is a non-issue — log
+        // quietly and move on.
         if (playingNowRef.current === audio) playingNowRef.current = null;
+        revokeOnce();
         playNextClip();
       };
-      audio.play().catch((e) => {
-        // Most likely the user revoked permission or there's a codec issue.
-        // Skip this clip and try the next.
-        console.error("clip play failed:", e);
-        URL.revokeObjectURL(url);
+      audio.play().catch(() => {
+        // Autoplay rejection, codec issue, etc. We already moved past
+        // the listening gesture so this should be rare. Quiet log.
         if (playingNowRef.current === audio) playingNowRef.current = null;
+        revokeOnce();
         playNextClip();
       });
-    } catch (e) {
-      console.error("clip decode failed:", e);
+    } catch {
+      // base64 decode failed — clip was malformed. Skip to next.
       playNextClip();
     }
   }, []);

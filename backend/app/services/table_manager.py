@@ -328,7 +328,7 @@ class TableManager:
                     table_id=rt.table_id,
                     hand_id=rt.current_state.hand_id,
                     deck_reveal="",  # filled in at hand-end normally
-                    public_state=_public_view(rt.current_state, reveal=True),
+                    public_state=_public_view(rt.current_state, reveal=True, hand_number=rt.hand_number),
                     pot_distributions=[],
                 )
                 with contextlib.suppress(asyncio.QueueFull):
@@ -339,7 +339,7 @@ class TableManager:
                     hand_id=rt.current_state.hand_id,
                     hand_number=rt.hand_number,
                     deck_commit=rt.current_state.deck_commit,
-                    public_state=_public_view(rt.current_state),
+                    public_state=_public_view(rt.current_state, hand_number=rt.hand_number),
                 )
                 with contextlib.suppress(asyncio.QueueFull):
                     queue.put_nowait(started)
@@ -365,7 +365,7 @@ class TableManager:
                     table_id=rt.table_id,
                     hand_id=rt.current_state.hand_id,
                     deck_reveal="",
-                    public_state=_public_view(rt.current_state, reveal=True),
+                    public_state=_public_view(rt.current_state, reveal=True, hand_number=rt.hand_number),
                     pot_distributions=[],
                 )
             else:
@@ -374,7 +374,7 @@ class TableManager:
                     hand_id=rt.current_state.hand_id,
                     hand_number=rt.hand_number,
                     deck_commit=rt.current_state.deck_commit,
-                    public_state=_public_view(rt.current_state),
+                    public_state=_public_view(rt.current_state, hand_number=rt.hand_number),
                 )
             with contextlib.suppress(asyncio.QueueFull):
                 public_q.put_nowait(event)
@@ -462,7 +462,7 @@ class TableManager:
                     hand_id=rt.current_state.hand_id,
                     hand_number=rt.hand_number,
                     deck_commit=rt.current_state.deck_commit,
-                    public_state=_public_view(rt.current_state),
+                    public_state=_public_view(rt.current_state, hand_number=rt.hand_number),
                 ))
 
                 # Send private views to all in-hand players except the to-act
@@ -595,7 +595,7 @@ class TableManager:
                         action_type=action.action_type.value,
                         amount=action.amount,
                         auto=is_auto,
-                        public_state=_public_view(rt.current_state),
+                        public_state=_public_view(rt.current_state, hand_number=rt.hand_number),
                     ))
 
                     new_to_act = (
@@ -612,7 +612,7 @@ class TableManager:
                     table_id=rt.table_id,
                     hand_id=rt.current_state.hand_id,
                     deck_reveal=rt.current_deck.reveal() if rt.current_deck else "",
-                    public_state=_public_view(rt.current_state, reveal=True),
+                    public_state=_public_view(rt.current_state, reveal=True, hand_number=rt.hand_number),
                     pot_distributions=_compute_pot_distributions(rt.current_state),
                 ))
 
@@ -647,7 +647,20 @@ class TableManager:
                                 )
 
                 self._publish_seats(rt)
-                await asyncio.sleep(3)
+
+                # Inter-hand pause. Longer after a showdown so viewers have
+                # time to register the winning hand, see the highlighted
+                # cards, and let the narration finish — those clips can
+                # run ~5s. For fold-wins there's nothing to look at, so
+                # keep it brief.
+                final_in_hand = [
+                    p for p in rt.current_state.players
+                    if p is not None and p.status in (
+                        PlayerStatus.ACTIVE, PlayerStatus.ALL_IN,
+                    )
+                ]
+                went_to_showdown = len(final_in_hand) >= 2
+                await asyncio.sleep(10 if went_to_showdown else 3)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -841,11 +854,14 @@ def _compute_positions(state: GameState) -> dict[str, str]:
     return {p.id: labels[i] for i, p in enumerate(ordered) if i < len(labels)}
 
 
-def _public_view(state: GameState, reveal: bool = False) -> dict:
+def _public_view(
+    state: GameState, reveal: bool = False, hand_number: int = 0,
+) -> dict:
     pot_total = sum(p.total_committed for p in state.players if p is not None)
     positions = _compute_positions(state)
     return {
         "hand_id": state.hand_id,
+        "hand_number": hand_number,
         "phase": state.phase.value,
         "board": [str(c) for c in state.board],
         "pots": [

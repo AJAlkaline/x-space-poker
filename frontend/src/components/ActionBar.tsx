@@ -172,7 +172,10 @@ export function ActionBar({
         gap: "0.75rem",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div
+        className="action-header"
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+      >
         <span style={{ fontSize: "0.85rem", opacity: 0.85 }}>Your action</span>
         <ActionTimer
           baseDeadlineUnixMs={privateState?.base_deadline_unix_ms ?? null}
@@ -266,7 +269,10 @@ export function ActionBar({
               }
             }}
           />
-          <div style={{ fontSize: "0.85rem", opacity: 0.7 }}>
+          <div
+            className="sizer-min-max"
+            style={{ fontSize: "0.85rem", opacity: 0.7 }}
+          >
             Min {minSize} · Max {maxSize}
           </div>
         </div>

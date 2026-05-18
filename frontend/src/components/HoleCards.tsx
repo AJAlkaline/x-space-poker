@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { PrivateState } from "../lib/types";
 import { CardView } from "./TableView";
@@ -7,6 +8,19 @@ interface HoleCardsProps {
 }
 
 export function HoleCards({ privateState }: HoleCardsProps) {
+  // Use the small card variant on mobile so the strip is more compact.
+  // Listen for viewport changes so rotation updates the layout.
+  const [small, setSmall] = useState(() =>
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(max-width: 640px)").matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(max-width: 640px)");
+    const handler = (e: MediaQueryListEvent) => setSmall(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
   if (!privateState?.hole) return null;
   const cards = privateState.hole;
   // Re-key by card identity so when a new hand deals new cards, the
@@ -45,7 +59,7 @@ export function HoleCards({ privateState }: HoleCardsProps) {
             }}
             style={{ transformStyle: "preserve-3d" }}
           >
-            <CardView card={c} highlighted={winningCards.has(c)} />
+            <CardView card={c} highlighted={winningCards.has(c)} small={small} />
           </motion.div>
         ))}
       </div>

@@ -44,6 +44,7 @@ def public_event_to_wire(event: PublicEvent) -> dict:
             "type": "hand_complete",
             "state": event.public_state,
             "pot_distributions": event.pot_distributions or [],
+            "next_hand_starts_at_unix_ms": event.next_hand_starts_at_unix_ms,
         }
     if isinstance(event, HandAbortedEvent):
         return {

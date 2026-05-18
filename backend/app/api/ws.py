@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import re
 import secrets
 
@@ -23,12 +24,40 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from app.core.config import get_settings
 from app.core.security import verify_session_token
 from app.engine import Action, ActionType
+from app.services.ban_list import is_banned
 from app.services.table_manager import get_manager
 from app.services.wire import event_to_wire, public_event_to_wire
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 _HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{2,20}$")
+
+
+def _client_ip(websocket: WebSocket) -> str | None:
+    """Resolve the client IP for a WebSocket.
+
+    Starlette stores it on `websocket.client.host`. Behind the ALB,
+    this only reflects the real client when uvicorn is started with
+    `--proxy-headers --forwarded-allow-ips "*"` (see Dockerfile).
+    """
+    return websocket.client.host if websocket.client else None
+
+
+async def _reject_if_banned(websocket: WebSocket) -> bool:
+    """Close the connection with 1008 if the client IP is banned.
+
+    Returns True if the connection was rejected (caller should return
+    immediately); False if it's allowed to proceed.
+    """
+    ip = _client_ip(websocket)
+    if is_banned(ip):
+        log.info("ws: rejecting banned ip %s", ip)
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION, reason="forbidden",
+        )
+        return True
+    return False
 
 
 def _resolve_handle(websocket: WebSocket, as_: str | None) -> str | None:
@@ -53,6 +82,8 @@ def _resolve_handle(websocket: WebSocket, as_: str | None) -> str | None:
 async def player_socket(
     websocket: WebSocket, code: str, as_: str | None = Query(None, alias="as"),
 ) -> None:
+    if await _reject_if_banned(websocket):
+        return
     handle = _resolve_handle(websocket, as_)
     if handle is None:
         await websocket.close(
@@ -66,6 +97,12 @@ async def player_socket(
             code=status.WS_1008_POLICY_VIOLATION, reason="table not found",
         )
         return
+
+    # Log the handle+IP correlation at connect time. This is the only
+    # place we surface "which IP did handle X connect from", which makes
+    # it possible to find a griefer's IP for the ban list by grepping
+    # the CloudWatch logs after the fact.
+    log.info("ws/tables: handle=%s code=%s ip=%s", handle, code, _client_ip(websocket))
 
     await websocket.accept()
     queue = mgr.subscribe_player(rt.table_id, handle)
@@ -126,6 +163,8 @@ async def spectator_socket(
 ) -> None:
     """Spectator: public stream only. Auth is optional — anonymous spectators
     get a synthetic id; authenticated ones use their handle."""
+    if await _reject_if_banned(websocket):
+        return
     handle = _resolve_handle(websocket, as_)
     mgr = get_manager()
     rt = mgr.get_by_code(code)
@@ -185,6 +224,8 @@ async def audio_socket(websocket: WebSocket, code: str) -> None:
 
     from app.services.audio_bus import get_audio_bus
 
+    if await _reject_if_banned(websocket):
+        return
     mgr = get_manager()
     rt = mgr.get_by_code(code)
     if rt is None:

@@ -70,6 +70,13 @@ export interface PublicState {
    *  visible to everyone, not just the actor. Null between hands or at
    *  hand complete. */
   to_act_deadline_unix_ms: number | null;
+  /** Absolute deadline (ms since epoch) when the to-act player's base
+   *  25s timer expires. After this, the time bank takes over until
+   *  `to_act_deadline_unix_ms`. Observers render a two-phase countdown
+   *  matching the actor's own ActionTimer. Null between hands or when
+   *  no one is to act. Optional — older servers may omit this; fall
+   *  back to `to_act_deadline_unix_ms` for a single-phase display. */
+  to_act_base_deadline_unix_ms?: number | null;
   button: number;
   small_blind: number;
   big_blind: number;
@@ -111,7 +118,16 @@ export interface SeatInfo {
 export type ServerMessage =
   | { type: "hand_started"; state: PublicState }
   | { type: "state_update"; state: PublicState; action?: ActionInfo }
-  | { type: "hand_complete"; state: PublicState; pot_distributions: PotDistribution[] }
+  | {
+      type: "hand_complete";
+      state: PublicState;
+      pot_distributions: PotDistribution[];
+      /** Absolute deadline (ms since epoch) for the next hand's auto-start.
+       * If the countdown passes without a `hand_started` message, the loop is
+       * blocked waiting for more eligible players to sit. May be 0 from
+       * older servers that don't emit this field — treat 0 as "unknown". */
+      next_hand_starts_at_unix_ms?: number;
+    }
   | { type: "hand_aborted"; hand_id: string; refunds: Record<string, number> }
   | { type: "private"; state: PrivateState }
   | { type: "seats"; seats: (SeatInfo | null)[] }

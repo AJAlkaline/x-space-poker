@@ -63,6 +63,17 @@ class Settings(BaseSettings):
     # disable the fake path.
     auth_mode: str = "both"
 
+    # Moderation: comma-separated list of banned client IPs and/or CIDR
+    # ranges (e.g. "1.2.3.4,5.6.7.0/24,2001:db8::/32"). Matching clients
+    # receive 403 on HTTP and 1008 on WebSocket before any route logic
+    # runs. IPs are resolved from the connection's `client.host`, which
+    # only reflects the real client when uvicorn is launched with
+    # `--proxy-headers --forwarded-allow-ips "*"` (set in the Dockerfile).
+    # Without those flags the app sees only the ALB's address. To ban at
+    # runtime, update the BANNED_IPS env var in the ECS task definition
+    # and force a new deployment.
+    banned_ips: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

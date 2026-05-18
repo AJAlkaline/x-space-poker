@@ -59,6 +59,15 @@ TIMEBANK_MAX = 60.0
 TIMEBANK_REFILL_PER_HAND = 10.0
 DISCONNECT_GRACE_SECONDS = 30.0
 
+# Inter-hand pause durations. Longer after a showdown so viewers can
+# register the winning hand, see highlighted cards, and let the narration
+# finish (TTS clips can run ~5s). For fold-wins there's nothing to look
+# at, so keep it brief. These are also broadcast as part of the
+# hand_complete event's `next_hand_starts_at_unix_ms` deadline so clients
+# can render an inter-hand countdown.
+INTER_HAND_PAUSE_SHOWDOWN_S = 10.0
+INTER_HAND_PAUSE_FOLD_WIN_S = 3.0
+
 # Avoid easily-confused chars (no 0/O, 1/I/L)
 _CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 
@@ -106,6 +115,23 @@ class TableRuntime:
     closed: asyncio.Event = field(default_factory=asyncio.Event)
     seats_changed: asyncio.Event = field(default_factory=asyncio.Event)
     narration_enabled: bool = False
+    # Absolute deadlines (ms since epoch) for the player currently to
+    # act. Two values so observers can render a base-then-bank countdown
+    # that matches the actor's own two-phase ActionTimer:
+    #   - `current_to_act_base_deadline_unix_ms` = end of base 25s window
+    #   - `current_to_act_deadline_unix_ms` = end of base + remaining bank
+    # (the auto-fold deadline). Both are set whenever the action loop
+    # computes a new deadline; cleared on hand complete / abort. Reused
+    # by the initial-snapshot helpers so a player or spectator who joins
+    # mid-hand sees the badge immediately, not an empty actor tile.
+    current_to_act_deadline_unix_ms: int | None = None
+    current_to_act_base_deadline_unix_ms: int | None = None
+    # Absolute deadline (ms since epoch) when the next hand auto-starts
+    # after a hand_complete. Set during the inter-hand pause. The COMPLETE
+    # snapshot path (a player joining between hands) needs this so they
+    # see the same countdown as players who received the original
+    # hand_complete event.
+    current_next_hand_starts_at_unix_ms: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +404,9 @@ class TableManager:
                     deck_reveal="",  # filled in at hand-end normally
                     public_state=_public_view(rt.current_state, reveal=True, hand_number=rt.hand_number),
                     pot_distributions=[],
+                    next_hand_starts_at_unix_ms=(
+                        rt.current_next_hand_starts_at_unix_ms or 0
+                    ),
                 )
                 with contextlib.suppress(asyncio.QueueFull):
                     queue.put_nowait(event)
@@ -387,7 +416,12 @@ class TableManager:
                     hand_id=rt.current_state.hand_id,
                     hand_number=rt.hand_number,
                     deck_commit=rt.current_state.deck_commit,
-                    public_state=_public_view(rt.current_state, hand_number=rt.hand_number),
+                    public_state=_public_view(
+                        rt.current_state,
+                        hand_number=rt.hand_number,
+                        to_act_deadline_unix_ms=rt.current_to_act_deadline_unix_ms,
+                        to_act_base_deadline_unix_ms=rt.current_to_act_base_deadline_unix_ms,
+                    ),
                 )
                 with contextlib.suppress(asyncio.QueueFull):
                     queue.put_nowait(started)
@@ -415,6 +449,9 @@ class TableManager:
                     deck_reveal="",
                     public_state=_public_view(rt.current_state, reveal=True, hand_number=rt.hand_number),
                     pot_distributions=[],
+                    next_hand_starts_at_unix_ms=(
+                        rt.current_next_hand_starts_at_unix_ms or 0
+                    ),
                 )
             else:
                 event = HandStartedEvent(
@@ -422,7 +459,12 @@ class TableManager:
                     hand_id=rt.current_state.hand_id,
                     hand_number=rt.hand_number,
                     deck_commit=rt.current_state.deck_commit,
-                    public_state=_public_view(rt.current_state, hand_number=rt.hand_number),
+                    public_state=_public_view(
+                        rt.current_state,
+                        hand_number=rt.hand_number,
+                        to_act_deadline_unix_ms=rt.current_to_act_deadline_unix_ms,
+                        to_act_base_deadline_unix_ms=rt.current_to_act_base_deadline_unix_ms,
+                    ),
                 )
             with contextlib.suppress(asyncio.QueueFull):
                 public_q.put_nowait(event)
@@ -458,9 +500,22 @@ class TableManager:
             return
         state = rt.seat_state.get(player_id)
         bank_remaining = state.time_bank_seconds if state else 0.0
-        now_ms = int(time.time() * 1000)
-        base_deadline = now_ms + int(ACTION_TIMER_SECONDS * 1000)
-        bank_deadline = base_deadline + int(bank_remaining * 1000)
+        # Reuse the deadlines stamped on `rt` by the action loop / hand
+        # start. Computing fresh deadlines here would drift from the
+        # public state's deadlines (which were just published with
+        # `_public_view`), so the actor's badge and ActionTimer would
+        # show different end-of-bank times. Fall back to a fresh compute
+        # if for some reason rt hasn't been stamped yet (defensive).
+        if rt.current_to_act_base_deadline_unix_ms is not None:
+            base_deadline = rt.current_to_act_base_deadline_unix_ms
+        else:
+            base_deadline = int(time.time() * 1000) + int(
+                ACTION_TIMER_SECONDS * 1000,
+            )
+        if rt.current_to_act_deadline_unix_ms is not None:
+            bank_deadline = rt.current_to_act_deadline_unix_ms
+        else:
+            bank_deadline = base_deadline + int(bank_remaining * 1000)
         priv = _private_view(
             rt.current_state, player_id,
             base_deadline_unix_ms=base_deadline,
@@ -513,13 +568,23 @@ class TableManager:
                     if rt.current_state.betting.to_act else None
                 )
                 first_deadline_ms: int | None = None
+                first_base_deadline_ms: int | None = None
                 if first_to_act is not None:
                     ss = rt.seat_state.get(first_to_act)
                     bank_remaining = ss.time_bank_seconds if ss else 0.0
-                    total_budget_s = ACTION_TIMER_SECONDS + bank_remaining
-                    first_deadline_ms = int(
-                        (time.time() + total_budget_s) * 1000,
+                    # Use a single time.time() reading so base and bank
+                    # deadlines stay consistent with each other.
+                    now_s = time.time()
+                    first_base_deadline_ms = int(
+                        (now_s + ACTION_TIMER_SECONDS) * 1000,
                     )
+                    first_deadline_ms = first_base_deadline_ms + int(
+                        bank_remaining * 1000,
+                    )
+                rt.current_to_act_deadline_unix_ms = first_deadline_ms
+                rt.current_to_act_base_deadline_unix_ms = first_base_deadline_ms
+                # Inter-hand pause is over once the next hand starts.
+                rt.current_next_hand_starts_at_unix_ms = None
 
                 rt.bus.publish_public(HandStartedEvent(
                     table_id=rt.table_id,
@@ -530,6 +595,7 @@ class TableManager:
                         rt.current_state,
                         hand_number=rt.hand_number,
                         to_act_deadline_unix_ms=first_deadline_ms,
+                        to_act_base_deadline_unix_ms=first_base_deadline_ms,
                     ),
                 ))
 
@@ -663,13 +729,21 @@ class TableManager:
                         if rt.current_state.betting.to_act else None
                     )
                     next_deadline_ms: int | None = None
+                    next_base_deadline_ms: int | None = None
                     if next_to_act is not None:
                         ss = rt.seat_state.get(next_to_act)
                         bank_remaining = ss.time_bank_seconds if ss else 0.0
-                        total_budget_s = ACTION_TIMER_SECONDS + bank_remaining
-                        next_deadline_ms = int(
-                            (time.time() + total_budget_s) * 1000,
+                        # Single time.time() so base and bank deadlines
+                        # stay consistent with each other.
+                        now_s = time.time()
+                        next_base_deadline_ms = int(
+                            (now_s + ACTION_TIMER_SECONDS) * 1000,
                         )
+                        next_deadline_ms = next_base_deadline_ms + int(
+                            bank_remaining * 1000,
+                        )
+                    rt.current_to_act_deadline_unix_ms = next_deadline_ms
+                    rt.current_to_act_base_deadline_unix_ms = next_base_deadline_ms
 
                     rt.bus.publish_public(ActionAppliedEvent(
                         table_id=rt.table_id,
@@ -683,6 +757,7 @@ class TableManager:
                             rt.current_state,
                             hand_number=rt.hand_number,
                             to_act_deadline_unix_ms=next_deadline_ms,
+                            to_act_base_deadline_unix_ms=next_base_deadline_ms,
                         ),
                     ))
 
@@ -693,12 +768,38 @@ class TableManager:
                         self._publish_private_state(rt, pp.id)
 
                 # ---- Hand resolution ----
+                # Compute the inter-hand pause duration first so we can
+                # advertise the next-hand deadline on the hand_complete
+                # event. Clients render a countdown from this absolute
+                # timestamp (same pattern as to_act_deadline_unix_ms).
+                final_in_hand = [
+                    p for p in rt.current_state.players
+                    if p is not None and p.status in (
+                        PlayerStatus.ACTIVE, PlayerStatus.ALL_IN,
+                    )
+                ]
+                went_to_showdown = len(final_in_hand) >= 2
+                pause_s = (
+                    INTER_HAND_PAUSE_SHOWDOWN_S if went_to_showdown
+                    else INTER_HAND_PAUSE_FOLD_WIN_S
+                )
+                next_hand_at_ms = int((time.time() + pause_s) * 1000)
+
+                # No active to-act once the hand is over.
+                rt.current_to_act_deadline_unix_ms = None
+                rt.current_to_act_base_deadline_unix_ms = None
+                # Remember the inter-hand deadline so a player joining
+                # between hands (COMPLETE phase snapshot) sees the same
+                # countdown as players who received the original event.
+                rt.current_next_hand_starts_at_unix_ms = next_hand_at_ms
+
                 rt.bus.publish_public(HandCompletedEvent(
                     table_id=rt.table_id,
                     hand_id=rt.current_state.hand_id,
                     deck_reveal=rt.current_deck.reveal() if rt.current_deck else "",
                     public_state=_public_view(rt.current_state, reveal=True, hand_number=rt.hand_number),
                     pot_distributions=_compute_pot_distributions(rt.current_state),
+                    next_hand_starts_at_unix_ms=next_hand_at_ms,
                 ))
 
                 # Update seats from final stacks + bust handling.
@@ -733,19 +834,7 @@ class TableManager:
 
                 self._publish_seats(rt)
 
-                # Inter-hand pause. Longer after a showdown so viewers have
-                # time to register the winning hand, see the highlighted
-                # cards, and let the narration finish — those clips can
-                # run ~5s. For fold-wins there's nothing to look at, so
-                # keep it brief.
-                final_in_hand = [
-                    p for p in rt.current_state.players
-                    if p is not None and p.status in (
-                        PlayerStatus.ACTIVE, PlayerStatus.ALL_IN,
-                    )
-                ]
-                went_to_showdown = len(final_in_hand) >= 2
-                await asyncio.sleep(10 if went_to_showdown else 3)
+                await asyncio.sleep(pause_s)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -774,6 +863,9 @@ class TableManager:
                         stack=seat.stack + committed,
                         sitting_out=seat.sitting_out,
                     )
+        rt.current_to_act_deadline_unix_ms = None
+        rt.current_to_act_base_deadline_unix_ms = None
+        rt.current_next_hand_starts_at_unix_ms = None
         rt.bus.publish_public(HandAbortedEvent(
             table_id=rt.table_id,
             hand_id=rt.current_state.hand_id,
@@ -944,6 +1036,7 @@ def _public_view(
     reveal: bool = False,
     hand_number: int = 0,
     to_act_deadline_unix_ms: int | None = None,
+    to_act_base_deadline_unix_ms: int | None = None,
 ) -> dict:
     pot_total = sum(p.total_committed for p in state.players if p is not None)
     positions = _compute_positions(state)
@@ -960,11 +1053,16 @@ def _public_view(
         "current_bet": state.betting.current_bet,
         "min_raise": state.betting.min_raise,
         "to_act": list(state.betting.to_act),
-        # Absolute timestamp by which the to-act player must respond. Set
-        # whenever a fresh deadline is computed (start of each player's
-        # turn). Clients render countdown badges from this. None when no
-        # deadline applies (between hands, hand complete, etc).
+        # Absolute timestamps for the to-act player's countdown:
+        #   - `to_act_base_deadline_unix_ms`: when the base 25s expires
+        #     and the time bank kicks in.
+        #   - `to_act_deadline_unix_ms`: when the bank also expires and
+        #     auto-fold fires.
+        # Observers render a two-phase countdown matching the actor's
+        # own ActionTimer. Both None between hands / when no one is to
+        # act.
         "to_act_deadline_unix_ms": to_act_deadline_unix_ms,
+        "to_act_base_deadline_unix_ms": to_act_base_deadline_unix_ms,
         "button": state.button,
         "small_blind": state.small_blind,
         "big_blind": state.big_blind,

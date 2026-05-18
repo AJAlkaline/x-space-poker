@@ -56,6 +56,13 @@ class HandCompletedEvent:
     deck_reveal: str = ""
     public_state: dict = None  # type: ignore[assignment]  # with hole reveals
     pot_distributions: list[dict] = None  # type: ignore[assignment]
+    # Absolute deadline (ms since epoch) for when the next hand will
+    # auto-start, assuming enough seated players remain. Clients render
+    # a countdown by computing remaining time from `Date.now()`. If the
+    # countdown expires and no `hand_started` arrives, the loop is
+    # blocked waiting for more eligible players to sit — clients should
+    # transition to a "waiting for players" indicator.
+    next_hand_starts_at_unix_ms: int = 0
 
 
 @dataclass(frozen=True)

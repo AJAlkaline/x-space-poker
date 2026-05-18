@@ -229,6 +229,47 @@ def test_seats_broadcast_after_each_join(client: TestClient) -> None:
         assert bob_started["state"]["pot_total"] == 15
 
 
+def test_hand_complete_carries_next_hand_deadline(client: TestClient) -> None:
+    """hand_complete advertises the absolute unix-ms deadline for the
+    auto-start of the next hand. Frontend renders a countdown from this
+    plus a "waiting for players" banner if the deadline expires without
+    a hand_started arriving (loop is gated on >=2 eligible seats).
+    Field name: next_hand_starts_at_unix_ms."""
+    import time
+
+    res = client.post(
+        "/api/tables", params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+
+    with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+         client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+        for who, seat in [("alice", 0), ("bob", 1)]:
+            client.post(
+                "/api/tables/join", params={"as": who},
+                json={"code": code, "seat": seat, "buy_in": 1000},
+            )
+        _drain_until(ws_a, ["hand_started"])
+        _drain_until(ws_b, ["hand_started"])
+
+        # Alice (button heads-up pre-flop) folds → fold-win, ~3s pause.
+        priv = _drain_until(ws_a, ["private"])
+        assert priv["state"]["your_turn"] is True
+        sent_at_ms = int(time.time() * 1000)
+        ws_a.send_json({"type": "action", "action": "fold"})
+
+        complete = _drain_until(ws_a, ["hand_complete"])
+        assert "next_hand_starts_at_unix_ms" in complete, complete
+        deadline = complete["next_hand_starts_at_unix_ms"]
+        assert isinstance(deadline, int) and deadline > 0
+        # Fold-win pause is 3s. Allow generous slack for test scheduling.
+        delta_ms = deadline - sent_at_ms
+        assert 2_000 <= delta_ms <= 6_000, (
+            f"fold-win deadline should be ~3s out, got delta={delta_ms}ms"
+        )
+
+
 def test_hand_complete_includes_pot_distributions(client: TestClient) -> None:
     """hand_complete carries pot_distributions describing who won each pot,
     with hand description and best-five for showdown winners."""

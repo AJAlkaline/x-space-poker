@@ -37,4 +37,10 @@ ENV STATIC_DIR=/app/static
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import urllib.request,sys; urllib.request.urlopen('http://localhost:8000/health'); sys.exit(0)" || exit 1
-CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers + --forwarded-allow-ips "*" make uvicorn trust the
+# ALB's X-Forwarded-For header so `request.client.host` reflects the
+# real client IP, not the ALB. The IP ban list (BANNED_IPS env var)
+# relies on this — without it every client looks like it's coming from
+# the ALB and the ban list would either match nothing or kill everyone.
+# Safe here because the ALB is the only thing that can reach the task.
+CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

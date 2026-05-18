@@ -230,7 +230,6 @@ export function TableView({ publicState, seats, potDistributions }: TableViewPro
           border: "1px solid #2a4d3f",
           borderRadius: 16,
           padding: "2rem 1rem",
-          minHeight: 400,
           overflow: "hidden",
         }}
       >
@@ -254,6 +253,7 @@ export function TableView({ publicState, seats, potDistributions }: TableViewPro
 
         {/* Board */}
         <div
+          className="table-board"
           style={{
             display: "flex",
             justifyContent: "center",
@@ -282,6 +282,7 @@ export function TableView({ publicState, seats, potDistributions }: TableViewPro
         {/* Pot */}
         <div
           ref={(el) => { tileRefs.current.set("pot", el); }}
+          className="table-pot"
           style={{ textAlign: "center", marginBottom: "1.5rem" }}
         >
           <div style={{ opacity: 0.7, fontSize: "0.85rem" }}>Pot</div>
@@ -296,7 +297,9 @@ export function TableView({ publicState, seats, potDistributions }: TableViewPro
           </motion.div>
         </div>
 
-        {/* Players */}
+        {/* Players grid — occupied seats only. Empty / sitting-out seats
+            collapse into a compact pill row below to save vertical space
+            (especially on mobile). */}
         <div
           className="table-players"
           style={{
@@ -306,42 +309,7 @@ export function TableView({ publicState, seats, potDistributions }: TableViewPro
           }}
         >
           {publicState.players.map((p, i) => {
-            if (!p) {
-              const seat = seats[i];
-              if (seat) {
-                return (
-                  <div
-                    key={i}
-                    style={{
-                      padding: "0.75rem",
-                      border: "1px dashed #2a4d3f",
-                      borderRadius: 8,
-                      opacity: 0.6,
-                      fontSize: "0.85rem",
-                    }}
-                  >
-                    <div style={{ fontWeight: 600 }}>{seat.user_id}</div>
-                    <div style={{ opacity: 0.8 }}>Stack: {seat.stack}</div>
-                    <div style={{ opacity: 0.6 }}>Sitting out this hand</div>
-                  </div>
-                );
-              }
-              return (
-                <div
-                  key={i}
-                  style={{
-                    padding: "0.75rem",
-                    border: "1px dashed #2a4d3f",
-                    borderRadius: 8,
-                    opacity: 0.4,
-                    textAlign: "center",
-                    fontSize: "0.85rem",
-                  }}
-                >
-                  Seat {i + 1}
-                </div>
-              );
-            }
+            if (!p) return null;
             const isToAct = publicState.to_act[0] === p.id;
             const isButton = publicState.button === p.seat;
             const seatInfo = seats[p.seat];
@@ -413,6 +381,9 @@ export function TableView({ publicState, seats, potDistributions }: TableViewPro
                     {isToAct && publicState.to_act_deadline_unix_ms && (
                       <CountdownBadge
                         deadlineUnixMs={publicState.to_act_deadline_unix_ms}
+                        baseDeadlineUnixMs={
+                          publicState.to_act_base_deadline_unix_ms ?? null
+                        }
                       />
                     )}
                   </span>
@@ -501,8 +472,87 @@ export function TableView({ publicState, seats, potDistributions }: TableViewPro
             );
           })}
         </div>
+
+        {/* Compact pill row for empty + sitting-out seats. Replaces the
+            full-size grid cells these used to occupy, saving vertical
+            space (especially noticeable on mobile). */}
+        <EmptySeatsRow players={publicState.players} seats={seats} />
       </div>
     </>
+  );
+}
+
+/**
+ * Compact wrap row showing all unoccupied + sitting-out seats as small
+ * pills. Renders nothing when every seat is active.
+ */
+function EmptySeatsRow({
+  players,
+  seats,
+}: {
+  players: (PublicState["players"][number])[];
+  seats: (SeatInfo | null)[];
+}) {
+  const pills: Array<
+    | { kind: "empty"; seat: number }
+    | { kind: "sittingOut"; seat: number; user_id: string; stack: number }
+  > = [];
+  for (let i = 0; i < players.length; i++) {
+    if (players[i]) continue;
+    const seat = seats[i];
+    if (seat) {
+      pills.push({
+        kind: "sittingOut",
+        seat: i,
+        user_id: seat.user_id,
+        stack: seat.stack,
+      });
+    } else {
+      pills.push({ kind: "empty", seat: i });
+    }
+  }
+  if (pills.length === 0) return null;
+  return (
+    <div
+      className="empty-seats"
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "0.4rem",
+        marginTop: "0.75rem",
+      }}
+    >
+      {pills.map((pill) =>
+        pill.kind === "empty" ? (
+          <span
+            key={pill.seat}
+            style={{
+              padding: "0.2rem 0.6rem",
+              border: "1px dashed #2a4d3f",
+              borderRadius: 999,
+              opacity: 0.45,
+              fontSize: "0.75rem",
+            }}
+          >
+            Seat {pill.seat + 1}
+          </span>
+        ) : (
+          <span
+            key={pill.seat}
+            style={{
+              padding: "0.2rem 0.6rem",
+              border: "1px dashed #2a4d3f",
+              borderRadius: 999,
+              opacity: 0.7,
+              fontSize: "0.75rem",
+            }}
+            title="Sitting out this hand"
+          >
+            {pill.user_id} · {pill.stack} · sitting out
+          </span>
+        ),
+      )}
+    </div>
   );
 }
 
@@ -624,14 +674,50 @@ export function CardView({
   );
 }
 
-function CountdownBadge({ deadlineUnixMs }: { deadlineUnixMs: number }) {
+function CountdownBadge({
+  deadlineUnixMs,
+  baseDeadlineUnixMs,
+}: {
+  deadlineUnixMs: number;
+  baseDeadlineUnixMs: number | null;
+}) {
   const [now, setNow] = useState(Date.now());
+  // 100 ms tick matches the actor's own ActionTimer so observers and
+  // the actor see numbers that increment/decrement in lockstep.
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 250);
+    const id = window.setInterval(() => setNow(Date.now()), 100);
     return () => window.clearInterval(id);
   }, []);
-  const remaining = Math.max(0, Math.ceil((deadlineUnixMs - now) / 1000));
-  const urgent = remaining <= 5;
+
+  // Two-phase display matching ActionTimer:
+  //   - base window (green): "Action timer" — show base remaining
+  //   - bank window (orange): "Time bank in use" — show bank remaining
+  //   - expired: "0s" red
+  // If the server doesn't send `baseDeadlineUnixMs` (older deploy),
+  // fall back to single-phase total countdown.
+  let remaining: number;
+  let mode: "base" | "bank" | "expired";
+  if (baseDeadlineUnixMs == null) {
+    remaining = Math.max(0, Math.ceil((deadlineUnixMs - now) / 1000));
+    mode = remaining <= 0 ? "expired" : remaining <= 5 ? "bank" : "base";
+  } else if (now < baseDeadlineUnixMs) {
+    remaining = Math.max(0, Math.ceil((baseDeadlineUnixMs - now) / 1000));
+    mode = "base";
+  } else if (now < deadlineUnixMs) {
+    remaining = Math.max(0, Math.ceil((deadlineUnixMs - now) / 1000));
+    mode = "bank";
+  } else {
+    remaining = 0;
+    mode = "expired";
+  }
+
+  const palette =
+    mode === "expired"
+      ? { bg: "#a33", color: "#fff", border: "#c66", title: "Auto-folded" }
+      : mode === "bank"
+        ? { bg: "#0e1f1a", color: "#e57b3a", border: "#a35f2a", title: "Time bank in use" }
+        : { bg: "#0e1f1a", color: "#7fb8a4", border: "#2a4d3f", title: "Action timer" };
+
   return (
     <span
       style={{
@@ -640,12 +726,12 @@ function CountdownBadge({ deadlineUnixMs }: { deadlineUnixMs: number }) {
         fontWeight: 700,
         padding: "0.1rem 0.45rem",
         borderRadius: 999,
-        background: urgent ? "#a33" : "#0e1f1a",
-        color: urgent ? "#fff" : "#7fb8a4",
-        border: `1px solid ${urgent ? "#c66" : "#2a4d3f"}`,
+        background: palette.bg,
+        color: palette.color,
+        border: `1px solid ${palette.border}`,
         fontVariantNumeric: "tabular-nums",
       }}
-      title={urgent ? "Time bank in use" : "Action timer"}
+      title={palette.title}
     >
       {remaining}s
     </span>

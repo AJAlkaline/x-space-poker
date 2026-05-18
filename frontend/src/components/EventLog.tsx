@@ -17,6 +17,14 @@ export function EventLog({ entries }: EventLogProps) {
   const [debug, setDebug] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [now, setNow] = useState(Date.now());
+  // On mobile, the log opens collapsed to save vertical space. The user
+  // can expand it via the header chevron. matchMedia runs once on mount —
+  // rotation between portrait/landscape won't auto-collapse, which is the
+  // right trade-off (don't surprise the user mid-game).
+  const [collapsed, setCollapsed] = useState(() =>
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(max-width: 640px)").matches,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Update relative timestamps every second.
@@ -26,12 +34,14 @@ export function EventLog({ entries }: EventLogProps) {
   }, []);
 
   // Stick-to-bottom: when new entries arrive and the toggle is on, scroll
-  // to the bottom on the next frame after layout.
+  // to the bottom on the next frame after layout. Skip when collapsed
+  // (the scroll element isn't rendered).
   useEffect(() => {
+    if (collapsed) return;
     if (stickToBottom && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [entries.length, stickToBottom]);
+  }, [entries.length, stickToBottom, collapsed]);
 
   // Detect if the user scrolls away from the bottom; if so, disable sticky.
   // Detect if they scroll back to the bottom; re-enable.
@@ -57,71 +67,93 @@ export function EventLog({ entries }: EventLogProps) {
 
   return (
     <div
-      className="event-log"
+      className={`event-log${collapsed ? " event-log-collapsed" : ""}`}
       style={{
         display: "grid",
-        gridTemplateRows: "auto 1fr",
+        gridTemplateRows: collapsed ? "auto" : "auto 1fr",
         border: "1px solid #2a2e36",
         borderRadius: 8,
         background: "#0e1116",
-        height: 280,
+        height: collapsed ? "auto" : 280,
       }}
     >
       <div
+        onClick={() => setCollapsed((c) => !c)}
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           padding: "0.5rem 0.75rem",
-          borderBottom: "1px solid #2a2e36",
+          borderBottom: collapsed ? "none" : "1px solid #2a2e36",
           fontSize: "0.85rem",
+          cursor: "pointer",
+          userSelect: "none",
         }}
+        title={collapsed ? "Expand event log" : "Collapse event log"}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+          <span
+            style={{
+              opacity: 0.6,
+              fontSize: "0.7rem",
+              display: "inline-block",
+              transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
+              transition: "transform 0.15s ease",
+            }}
+            aria-hidden
+          >
+            ▼
+          </span>
           <span style={{ fontWeight: 600 }}>Event log</span>
           <span style={{ opacity: 0.5, fontSize: "0.75rem" }}>
             {entries.length} {entries.length === 1 ? "entry" : "entries"}
           </span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "0.3rem",
-              cursor: "pointer",
-              fontSize: "0.75rem",
-              opacity: stickToBottom ? 1 : 0.5,
-            }}
-            title="Auto-scroll to the newest entry as it arrives"
+        {!collapsed && (
+          <div
+            style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}
+            onClick={(e) => e.stopPropagation()}
           >
-            <input
-              type="checkbox"
-              checked={stickToBottom}
-              onChange={(e) => setStickToBottom(e.target.checked)}
-            />
-            stick to bottom
-          </label>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "0.3rem",
-              cursor: "pointer",
-              fontSize: "0.75rem",
-              opacity: debug ? 1 : 0.5,
-            }}
-            title="Show raw event payloads for debugging"
-          >
-            <input
-              type="checkbox"
-              checked={debug}
-              onChange={(e) => setDebug(e.target.checked)}
-            />
-            debug
-          </label>
-        </div>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.3rem",
+                cursor: "pointer",
+                fontSize: "0.75rem",
+                opacity: stickToBottom ? 1 : 0.5,
+              }}
+              title="Auto-scroll to the newest entry as it arrives"
+            >
+              <input
+                type="checkbox"
+                checked={stickToBottom}
+                onChange={(e) => setStickToBottom(e.target.checked)}
+              />
+              stick to bottom
+            </label>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.3rem",
+                cursor: "pointer",
+                fontSize: "0.75rem",
+                opacity: debug ? 1 : 0.5,
+              }}
+              title="Show raw event payloads for debugging"
+            >
+              <input
+                type="checkbox"
+                checked={debug}
+                onChange={(e) => setDebug(e.target.checked)}
+              />
+              debug
+            </label>
+          </div>
+        )}
       </div>
+      {!collapsed && (
       <div
         ref={scrollRef}
         onScroll={handleScroll}
@@ -182,6 +214,7 @@ export function EventLog({ entries }: EventLogProps) {
           })
         )}
       </div>
+      )}
     </div>
   );
 }

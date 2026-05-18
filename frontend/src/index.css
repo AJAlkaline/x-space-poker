@@ -71,18 +71,37 @@ input {
   .app-shell {
     padding: 0.5rem;
   }
+  /* Page header stays as a single row on mobile so the title doesn't
+     stack above the narration link / status row. Children shrink so
+     they fit comfortably on a 375px viewport. */
   .page-header {
-    flex-direction: column;
-    align-items: flex-start;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
   }
   .page-header h2 {
-    font-size: 1.15rem;
+    font-size: 1rem !important;
     margin: 0;
   }
-  /* Table view: tighter padding + smaller min-column so two tiles fit
-     side-by-side on a 375px viewport. */
+  /* Tighten the vertical gap between major sections on the table page. */
+  .table-page-stack {
+    gap: 0.5rem !important;
+  }
+  /* Table view: tighter padding, no enforced min-height — let content
+     size the frame. Smaller min-column so two tiles fit side-by-side on
+     a 375px viewport. */
   .table-frame {
-    padding: 1rem 0.5rem !important;
+    padding: 0.75rem 0.5rem !important;
+    min-height: 0 !important;
+  }
+  /* Trim internal stacking inside the table-frame so the players grid
+     comes up sooner under the board/pot. */
+  .table-board {
+    margin-bottom: 0.5rem !important;
+    min-height: 56px !important;
+  }
+  .table-pot {
+    margin-bottom: 0.75rem !important;
   }
   .table-players {
     grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)) !important;
@@ -92,15 +111,39 @@ input {
     padding: 0.5rem !important;
     font-size: 0.85rem;
   }
-  /* Event log: shorter on mobile so the table stays in view. */
+  /* Compact pill row of empty / sitting-out seats — gaps are already
+     inline; nothing to add here unless a future shrink is wanted. */
+  /* Event log: defaults to collapsed on mobile (state-controlled in
+     EventLog.tsx). When expanded, force a shorter height so the table
+     stays in view. When collapsed, .event-log-collapsed wins. */
   .event-log {
     height: 160px !important;
   }
-  /* Action bar: presets should wrap nicely, number input wide enough. */
+  .event-log-collapsed {
+    height: auto !important;
+  }
+  /* Action bar: drop the "Your action / timer" header (timer also
+     renders on the actor's tile) and the min/max footer text — both
+     are redundant chrome that costs vertical space. */
+  .action-bar {
+    padding: 0.6rem 0.75rem !important;
+    gap: 0.5rem !important;
+  }
+  .action-bar .action-header {
+    display: none !important;
+  }
+  .action-bar .sizer-min-max {
+    display: none !important;
+  }
   .action-bar input[type="number"] {
     width: 100%;
   }
-  /* Hole cards strip can wrap onto two lines on mobile. Already wraps. */
+  /* Hole cards: tighter padding so the cards-plus-description strip
+     stays slim. */
+  .hole-cards {
+    padding: 0.5rem 0.75rem !important;
+    gap: 0.5rem !important;
+  }
   /* Top-off bar: stack the buttons under the stack text on narrow screens. */
   .top-off-bar {
     flex-direction: column !important;

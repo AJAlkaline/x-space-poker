@@ -118,6 +118,86 @@ def test_action_timer_includes_deadlines_in_private_view(client: TestClient) -> 
         assert b_priv2["state"]["base_deadline_unix_ms"] is not None
 
 
+def test_mid_hand_spectator_receives_to_act_deadline(client: TestClient) -> None:
+    """Regression: a spectator (or player) who connects mid-hand must see
+    the current to_act_deadline_unix_ms AND to_act_base_deadline_unix_ms
+    in the initial snapshot, so the countdown badge can do a two-phase
+    base→bank display matching the actor's own ActionTimer.
+
+    Reproduces two historical bugs:
+    - `_send_initial_public_snapshot` and `_send_initial_snapshot` used
+      to call `_public_view()` without passing the active deadline,
+      causing both fields to default to None and the badge to vanish.
+    - The badge previously rendered the bank-included deadline only,
+      so the actor's own badge would show ~85s while their action bar
+      counted down "25.0s base" — confusing inconsistency for the
+      acting player and anyone comparing screens.
+    """
+    code = _start_two_player_hand(client)
+    with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+         client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+        _drain_until(ws_a, ["seats"])
+        _drain_until(ws_b, ["seats"])
+        for who, seat in [("alice", 0), ("bob", 1)]:
+            client.post(
+                "/api/tables/join",
+                params={"as": who},
+                json={"code": code, "seat": seat, "buy_in": 1000},
+            )
+        _drain_until(ws_a, ["hand_started"])
+        _drain_until(ws_b, ["hand_started"])
+        _drain_until(ws_a, ["private"])
+
+        with client.websocket_connect(f"/ws/spectate/{code}") as ws_spec:
+            started = _drain_until(ws_spec, ["hand_started"])
+            state = started["state"]
+            deadline = state.get("to_act_deadline_unix_ms")
+            base_deadline = state.get("to_act_base_deadline_unix_ms")
+            assert deadline is not None, (
+                f"spectator must see to_act_deadline_unix_ms; got {state}"
+            )
+            assert base_deadline is not None, (
+                f"spectator must see to_act_base_deadline_unix_ms; got {state}"
+            )
+            assert isinstance(deadline, int) and isinstance(base_deadline, int)
+            # Bank deadline must be >= base; equal when no bank remains.
+            assert deadline >= base_deadline
+
+
+def test_public_base_deadline_matches_actor_private_base(
+    client: TestClient,
+) -> None:
+    """The base deadline on public state (what observers see) must equal
+    the actor's own private base deadline within a small window. Both
+    are computed from the same time.time() reading on each publish, so
+    drift should be sub-millisecond. Tolerance: 100ms.
+
+    Without this guarantee, the badge above the actor's seat and their
+    own ActionTimer can show different numbers at the same instant.
+    """
+    code = _start_two_player_hand(client)
+    with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+         client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+        for who, seat in [("alice", 0), ("bob", 1)]:
+            client.post(
+                "/api/tables/join", params={"as": who},
+                json={"code": code, "seat": seat, "buy_in": 1000},
+            )
+        a_start = _drain_until(ws_a, ["hand_started"])
+        _drain_until(ws_b, ["hand_started"])
+        a_priv = _drain_until(ws_a, ["private"])
+        assert a_priv["state"]["your_turn"] is True
+
+        public_base = a_start["state"]["to_act_base_deadline_unix_ms"]
+        private_base = a_priv["state"]["base_deadline_unix_ms"]
+        assert public_base is not None and private_base is not None
+        assert abs(public_base - private_base) < 100, (
+            f"public_base={public_base} vs private_base={private_base} "
+            "diverged by more than 100ms — observer and actor see "
+            "different countdowns"
+        )
+
+
 def test_disconnect_during_action_auto_folds_and_sits_out(
     client: TestClient,
 ) -> None:

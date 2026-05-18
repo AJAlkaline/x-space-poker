@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { Link, useParams } from "react-router-dom";
 import { useSession as useHandle } from "../lib/useSession";
 import { useTableSocket } from "../lib/useTableSocket";
@@ -32,12 +33,23 @@ export function TablePage() {
   );
   const [viewerCount, setViewerCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // Transient success message (top-off applied, bought in, etc.). Renders
+  // as a green banner alongside the error slot and auto-dismisses so it
+  // doesn't pile up. We use a number key so back-to-back identical
+  // notices still trigger the animation/dismiss cycle.
+  const [notice, setNotice] = useState<{ id: number; text: string } | null>(null);
   const [joinPending, setJoinPending] = useState(false);
   const [logState, setLogState] = useState<EventLogState>(emptyLogState);
   // Most recent hand's pot distributions. Lives through the inter-hand pause
   // so winners and winning cards stay highlighted until the next deal.
   const [potDistributions, setPotDistributions] =
     useState<PotDistribution[] | null>(null);
+  // Absolute deadline (ms since epoch) for the next hand auto-start. Set
+  // on hand_complete, cleared on hand_started/hand_aborted. If the deadline
+  // expires without a hand_started, the loop is blocked waiting for more
+  // eligible players to sit — we transition the banner to a "waiting"
+  // message in that case.
+  const [nextHandAt, setNextHandAt] = useState<number | null>(null);
   // Track the seat the player most recently occupied. When they bust out,
   // we use this to offer a one-click "Buy back in" at the same seat.
   const lastSeatRef = useRef<number | null>(null);
@@ -54,6 +66,7 @@ export function TablePage() {
           setPublicState(msg.state);
           setPrivateState(null);
           setPotDistributions(null);  // clear any previous-hand highlights
+          setNextHandAt(null);
           setError(null);
           break;
         case "state_update":
@@ -63,12 +76,14 @@ export function TablePage() {
         case "hand_complete":
           setPublicState(msg.state);
           setPotDistributions(msg.pot_distributions ?? []);
+          setNextHandAt(msg.next_hand_starts_at_unix_ms ?? null);
           setError(null);
           break;
         case "hand_aborted":
           setPublicState(null);
           setPrivateState(null);
           setPotDistributions(null);
+          setNextHandAt(null);
           break;
         case "private":
           setPrivateState(msg.state);
@@ -97,9 +112,20 @@ export function TablePage() {
   // Determine if I'm seated. Check the seats snapshot first; fall back to the
   // current public state's player list in case the seats message hasn't arrived
   // yet but a hand has already started with me in it.
+  //
+  // The `stack > 0` filter on inPublic matters at hand-complete: a busted
+  // player still appears in publicState.players with stack=0 (the engine
+  // keeps them for the final snapshot), but the backend has already removed
+  // them from rt.seats. Without this filter, `seated` stays true through
+  // the inter-hand pause, the TopOffBar renders, and the user's "buy back
+  // in" click hits /api/tables/top_off which rejects with "not seated".
+  // With the filter, `seated` flips to false at bust, so RebuyCTA shows
+  // instead.
   const inSeats = seats.findIndex((s) => s != null && s.user_id === handle) >= 0;
   const inPublic =
-    publicState?.players.some((p) => p != null && p.id === handle) ?? false;
+    publicState?.players.some(
+      (p) => p != null && p.id === handle && p.stack > 0,
+    ) ?? false;
   const seated = inSeats || inPublic;
 
   // Remember the most recent seat I occupied so we can offer a one-click
@@ -137,6 +163,14 @@ export function TablePage() {
   // mine for the next deal, but I'm a spectator until then.
   const waitingForNextHand = inSeats && handInProgress && !inPublic;
 
+  // Number of seats that are eligible to be dealt into the next hand:
+  // occupied, not sitting out, and stack > 0. The backend run loop gates
+  // on this same predicate (≥ 2 to deal). Used by the inter-hand status
+  // banner to decide between "next hand in Xs" and "waiting for players".
+  const eligibleSeatsCount = seats.filter(
+    (s) => s != null && !s.sitting_out && s.stack > 0,
+  ).length;
+
   // My current public player (used for stack readouts, top-off button).
   const myPublicPlayer =
     publicState?.players.find((p) => p != null && p.id === handle) ?? null;
@@ -155,6 +189,19 @@ export function TablePage() {
     if (!seated) setPrivateState(null);
   }, [seated]);
 
+  // Auto-dismiss the success notice after a short delay. The `id` in
+  // the dependency restarts the timer when a new notice replaces an
+  // existing one.
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3000);
+    return () => window.clearTimeout(t);
+  }, [notice?.id]);
+
+  const showNotice = useCallback((text: string) => {
+    setNotice({ id: Date.now(), text });
+  }, []);
+
   // Top-off endpoint — POST then let the seats event do the UI update.
   const topOff = async (amount: number) => {
     if (!handle || !code || amount <= 0) return;
@@ -169,7 +216,18 @@ export function TablePage() {
       if (!res.ok) {
         const text = await res.text();
         setError(`Top off failed: ${text}`);
+        return;
       }
+      // The response body is `{table_id, stack}`. Surface the new stack
+      // so the player sees the confirmation immediately, without waiting
+      // for the seats event to round-trip.
+      const data = (await res.json().catch(() => null)) as { stack?: number } | null;
+      const newStack = data?.stack;
+      showNotice(
+        newStack !== undefined
+          ? `Topped off +${amount}. Stack: ${newStack}.`
+          : `Topped off +${amount}.`,
+      );
     } catch (err) {
       setError(`Top off failed: ${err}`);
     }
@@ -187,6 +245,7 @@ export function TablePage() {
         body: JSON.stringify({ code, seat: seatNumber, buy_in: DEFAULT_BUY_IN }),
       });
       if (!res.ok) throw new Error(await res.text());
+      showNotice(`Bought in for ${DEFAULT_BUY_IN} at seat ${seatNumber + 1}.`);
     } catch (err) {
       setError(`Join failed: ${err}`);
     } finally {
@@ -197,7 +256,7 @@ export function TablePage() {
   if (!code) return <div>Missing table code.</div>;
 
   return (
-    <div style={{ display: "grid", gap: "1rem" }}>
+    <div className="table-page-stack" style={{ display: "grid", gap: "1rem" }}>
       <div
         className="page-header"
         style={{
@@ -250,6 +309,32 @@ export function TablePage() {
         </div>
       )}
 
+      <AnimatePresence>
+        {notice && (
+          <motion.div
+            key={notice.id}
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.2 }}
+            style={{
+              padding: "0.5rem 1rem",
+              border: "1px solid #4fd682",
+              background: "#0e1f1a",
+              borderRadius: 6,
+              color: "#cfe6dd",
+              fontSize: "0.9rem",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+            }}
+          >
+            <span style={{ color: "#4fd682", fontWeight: 700 }}>✓</span>
+            <span>{notice.text}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {!seated && offerRebuy && (
         <RebuyCTA
           seatNumber={previousSeat!}
@@ -300,6 +385,13 @@ export function TablePage() {
             to finish.
           </span>
         </div>
+      )}
+
+      {seated && !handInProgress && (
+        <InterHandStatus
+          deadlineUnixMs={nextHandAt}
+          eligibleSeatsCount={eligibleSeatsCount}
+        />
       )}
 
       {seated && (
@@ -537,6 +629,82 @@ function formatTimestamp(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/**
+ * Status banner between hands, shown to seated players only.
+ *
+ * Three states:
+ *   - Countdown:  deadline is in the future → "Next hand in Ns…"
+ *   - Waiting:    deadline missing OR expired AND fewer than 2 eligible
+ *                 players are seated → "Waiting for more players…"
+ *   - Dealing:    deadline expired but enough eligible players → loop is
+ *                 about to publish hand_started; brief transient.
+ *
+ * `eligibleSeatsCount` mirrors the backend gate (`len(eligible) >= 2`)
+ * — see [backend/app/services/table_manager.py:480-491].
+ */
+function InterHandStatus({
+  deadlineUnixMs,
+  eligibleSeatsCount,
+}: {
+  deadlineUnixMs: number | null;
+  eligibleSeatsCount: number;
+}) {
+  // Tick every 500ms so the countdown second-resolution feels responsive
+  // without burning CPU. Unmount stops the interval.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const hasDeadline = deadlineUnixMs != null && deadlineUnixMs > 0;
+  const remainingMs = hasDeadline ? deadlineUnixMs! - now : 0;
+  const countingDown = hasDeadline && remainingMs > 0;
+  const enoughPlayers = eligibleSeatsCount >= 2;
+
+  let icon: string;
+  let text: string;
+  let border: string;
+  if (countingDown) {
+    const secs = Math.max(1, Math.ceil(remainingMs / 1000));
+    icon = "⏱";
+    text = `Next hand in ${secs}s…`;
+    border = "#7fb8a4";
+  } else if (!enoughPlayers) {
+    const need = Math.max(0, 2 - eligibleSeatsCount);
+    icon = "👥";
+    text = need === 1
+      ? "Waiting for 1 more player to sit down…"
+      : "Waiting for players to sit down…";
+    border = "#c89c3a";
+  } else {
+    // Deadline passed and we have enough players — hand_started is
+    // imminent. Brief transient banner so the UI doesn't go blank.
+    icon = "🃏";
+    text = "Dealing next hand…";
+    border = "#7fb8a4";
+  }
+
+  return (
+    <div
+      style={{
+        padding: "0.6rem 0.9rem",
+        border: `1px solid ${border}`,
+        background: "#143027",
+        borderRadius: 6,
+        color: "#cfe6dd",
+        fontSize: "0.9rem",
+        display: "flex",
+        alignItems: "center",
+        gap: "0.5rem",
+      }}
+    >
+      <span style={{ fontSize: "1.1rem" }}>{icon}</span>
+      <span>{text}</span>
+    </div>
+  );
 }
 
 function RebuyCTA({

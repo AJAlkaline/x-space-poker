@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($cmds = @\\('node','nvm','fnm','winget','choco','volta'\\); foreach \\($c in $cmds\\) { $g = Get-Command $c -ErrorAction SilentlyContinue; if \\($g\\) { try { $ver = & $c --version 2>&1 | Select-Object -First 1 } catch { $ver = '?' }; \"$c -> $\\($g.Source\\) \\($ver\\)\" } else { \"$c -> not found\" } })",
+      "PowerShell(winget install CoreyButler.NVMforWindows --accept-package-agreements --accept-source-agreements 2>&1 | Select-Object -Last 30; \"EXIT=$LASTEXITCODE\")",
+      "PowerShell($candidates = @\\(\"$env:APPDATA\\\\nvm\\\\nvm.exe\",\"$env:LOCALAPPDATA\\\\nvm\\\\nvm.exe\",\"C:\\\\Program Files\\\\nvm\\\\nvm.exe\",\"C:\\\\nvm\\\\nvm.exe\"\\); foreach \\($p in $candidates\\) { if \\(Test-Path $p\\) { \"FOUND: $p\" } }; \"---\"; \"NVM_HOME=$env:NVM_HOME\"; \"NVM_SYMLINK=$env:NVM_SYMLINK\")",
+      "PowerShell($nvmHome = \\(Get-ItemProperty -Path 'HKLM:\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Session Manager\\\\Environment' -Name 'NVM_HOME' -ErrorAction SilentlyContinue\\).NVM_HOME; $nvmSymlink = \\(Get-ItemProperty -Path 'HKLM:\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Session Manager\\\\Environment' -Name 'NVM_SYMLINK' -ErrorAction SilentlyContinue\\).NVM_SYMLINK; \"NVM_HOME from registry: $nvmHome\"; \"NVM_SYMLINK from registry: $nvmSymlink\"; \"---\"; \"Existing nodejs dir:\"; Get-ChildItem 'C:\\\\Program Files\\\\nodejs' -ErrorAction SilentlyContinue | Select-Object Name,LinkType,Target | Format-Table -AutoSize)",
+      "PowerShell(\"Program Files\\\\nodejs exists: $\\(Test-Path 'C:\\\\Program Files\\\\nodejs'\\)\"; \"C:\\\\nvm4w\\\\nodejs exists: $\\(Test-Path 'C:\\\\nvm4w\\\\nodejs'\\)\"; \"node on PATH: $\\(\\(Get-Command node -ErrorAction SilentlyContinue\\).Source\\)\"; & 'C:\\\\Users\\\\AJAlk\\\\AppData\\\\Local\\\\nvm\\\\nvm.exe' version)"
+    ]
+  }
+}

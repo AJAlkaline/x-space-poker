@@ -6,13 +6,14 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, PlainTextResponse
 
 from app.api import audio, auth, tables, ws
 from app.core.config import get_settings
+from app.services.ban_list import is_banned
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,18 @@ _API_EXACT = {"health"}
 
 def create_app() -> FastAPI:
     settings = get_settings()
+
+    # Fail-fast in production if the JWT signing key is still the dev
+    # default. Otherwise every session token is predictable and forgeable
+    # because `dev-secret-change-me` is in the source. Better to refuse
+    # to boot than to silently issue insecure tokens.
+    if settings.env == "prod" and settings.jwt_secret == "dev-secret-change-me":
+        raise RuntimeError(
+            "JWT_SECRET must be overridden in production "
+            "(currently the dev default). Set the env var on the ECS task "
+            "and redeploy.",
+        )
+
     app = FastAPI(title="Spaces Poker", version="0.1.0", lifespan=lifespan)
 
     # CORS is only meaningful in dev (frontend on :5173, backend on :8000).
@@ -78,6 +91,24 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    @app.middleware("http")
+    async def ban_check(request: Request, call_next):
+        """Reject HTTP requests from banned IPs before any route runs.
+
+        Client IP comes from `request.client.host`. Behind the ALB this
+        is the ALB's address unless uvicorn was started with
+        `--proxy-headers --forwarded-allow-ips "*"`, in which case
+        Starlette's ProxyHeaders middleware rewrites it to the leftmost
+        X-Forwarded-For entry — the real client. See the Dockerfile.
+
+        WebSocket connections bypass HTTP middleware in Starlette; the
+        WS handlers do their own ban check at connect time.
+        """
+        client = request.client
+        if client is not None and is_banned(client.host):
+            return PlainTextResponse("forbidden", status_code=403)
+        return await call_next(request)
 
     # API routes. The /api prefix exists to keep the namespace separate
     # from SPA client-side routes (so a hypothetical "/tables/ABC" client

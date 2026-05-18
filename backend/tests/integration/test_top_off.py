@@ -55,3 +55,46 @@ def test_top_off_rejected_mid_hand(client: TestClient) -> None:
         )
         assert r.status_code == 400
         assert "mid-hand" in r.text.lower()
+
+
+def test_top_off_rejected_after_bust(client: TestClient) -> None:
+    """A busted player (removed from rt.seats at hand-complete) must be
+    rejected by /api/tables/top_off with 'not seated at this table'.
+
+    The frontend's `seated` computation depends on this 400 to route the
+    user to the rebuy/join flow instead of leaving them on the top-off
+    UI. If this rejection ever weakens — e.g. the backend starts silently
+    re-seating the player, or returns a different error string — the
+    frontend's RebuyCTA gate breaks and busted players see
+    'Top off failed: not seated at this table' on the live site.
+    """
+    res = client.post(
+        "/api/tables", params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+    for who, seat in [("alice", 0), ("bob", 1)]:
+        r = client.post(
+            "/api/tables/join", params={"as": who},
+            json={"code": code, "seat": seat, "buy_in": 1000},
+        )
+        assert r.status_code == 200, r.text
+
+    # Simulate the bust: pop bob from rt.seats the same way the run-loop's
+    # hand-complete handler does at table_manager.py L713 when a player's
+    # final stack is 0. We do this directly rather than driving the engine
+    # to a deterministic bust because the engine's deck is random and the
+    # min buy-in (20*BB) is too large to bust in a single forced-blind
+    # all-in without controlling cards.
+    from app.services.table_manager import get_manager
+    rt = get_manager().get_by_code(code)
+    assert rt is not None
+    bob_seat = next(n for n, s in rt.seats.items() if s.user_id == "bob")
+    del rt.seats[bob_seat]
+
+    r = client.post(
+        "/api/tables/top_off", params={"as": "bob"},
+        json={"code": code, "amount": 100},
+    )
+    assert r.status_code == 400, r.text
+    assert "not seated" in r.text.lower(), r.text

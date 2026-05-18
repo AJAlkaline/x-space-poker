@@ -89,6 +89,19 @@ export function ActionBar({
   const [betInputText, setBetInputText] = useState<string>("");
   const [numberInputFocused, setNumberInputFocused] = useState(false);
 
+  // Compute the legal range and clamped amount up front, before any
+  // conditional returns, so the hooks below see the same values on every
+  // render. Legals come from privateState (may be empty if not your turn).
+  const bet = legals.find((a) => a.action_type === "bet");
+  const raise = legals.find((a) => a.action_type === "raise");
+  const sizer = bet ?? raise;
+  const minSize = sizer?.min_amount ?? 0;
+  const maxSize = sizer?.max_amount ?? 0;
+  // The amount we'd submit if the user clicks Bet/Raise *right now*.
+  // Clamped to the legal range. Used for the Bet/Raise button labels and
+  // for the slider's `value` (sliders are inherently clamped controls).
+  const clampedAmount = Math.min(maxSize, Math.max(minSize, betAmount || minSize));
+
   // Reset bet amount when it's no longer your turn (so the slider starts fresh next time).
   useEffect(() => {
     if (!yourTurn) {
@@ -96,6 +109,19 @@ export function ActionBar({
       setBetInputText("");
     }
   }, [yourTurn, publicState?.hand_id]);
+
+  // When a preset/slider changes betAmount, mirror the new value into the
+  // text-input buffer so the next time the user focuses the number field
+  // they see the up-to-date value.
+  //
+  // IMPORTANT: this useEffect must stay above the conditional early-return
+  // below. If it moved down, the hook would be skipped when !yourTurn and
+  // React would throw error #310 (rendered fewer hooks than expected).
+  useEffect(() => {
+    if (!numberInputFocused) {
+      setBetInputText(String(clampedAmount));
+    }
+  }, [clampedAmount, numberInputFocused]);
 
   const stateConsistent =
     !publicState || isStateConsistent(publicState, legals, yourTurn, myHandle);
@@ -119,16 +145,6 @@ export function ActionBar({
   const fold = legals.find((a) => a.action_type === "fold");
   const check = legals.find((a) => a.action_type === "check");
   const call = legals.find((a) => a.action_type === "call");
-  const bet = legals.find((a) => a.action_type === "bet");
-  const raise = legals.find((a) => a.action_type === "raise");
-  const sizer = bet ?? raise;
-
-  const minSize = sizer?.min_amount ?? 0;
-  const maxSize = sizer?.max_amount ?? 0;
-  // The amount we'd submit if the user clicks Bet/Raise *right now*.
-  // Clamped to the legal range. Used for the Bet/Raise button labels and
-  // for the slider's `value` (sliders are inherently clamped controls).
-  const clampedAmount = Math.min(maxSize, Math.max(minSize, betAmount || minSize));
 
   // The number input's visible value. While the field is focused, we show
   // exactly what the user typed (even invalid intermediate states like
@@ -136,15 +152,6 @@ export function ActionBar({
   const numberInputValue = numberInputFocused
     ? betInputText
     : String(clampedAmount);
-
-  // When a preset/slider changes betAmount, mirror the new value into the
-  // text-input buffer so the next time the user focuses the number field
-  // they see the up-to-date value.
-  useEffect(() => {
-    if (!numberInputFocused) {
-      setBetInputText(String(clampedAmount));
-    }
-  }, [clampedAmount, numberInputFocused]);
 
   const pot = publicState.pot_total;
   const presets = [

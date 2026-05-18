@@ -125,10 +125,55 @@ export function TablePage() {
     previousSeat !== null && previousSeat < MAX_SEATS && seats[previousSeat] == null;
   const offerRebuy = !seated && previousSeat !== null && seatStillOpen;
 
+  // Hand-in-progress predicate. We don't have an explicit phase between
+  // hands, but `phase` clears to a non-complete value during a hand and
+  // hand_complete leaves it set to "complete" until the next deal.
+  const handInProgress =
+    publicState != null && publicState.phase !== "complete";
+
+  // I'm "waiting to sit" if I reserved a seat (in `seats`) but I'm not
+  // dealt into the current hand (not in `publicState.players`). This
+  // happens when a hand was already running when I joined. The seat is
+  // mine for the next deal, but I'm a spectator until then.
+  const waitingForNextHand = inSeats && handInProgress && !inPublic;
+
+  // My current public player (used for stack readouts, top-off button).
+  const myPublicPlayer =
+    publicState?.players.find((p) => p != null && p.id === handle) ?? null;
+  // My seat's stack as known by the table — visible even between hands
+  // when myPublicPlayer is null.
+  const mySeatStack = seats.find((s) => s != null && s.user_id === handle)?.stack ?? null;
+  const myStack = myPublicPlayer?.stack ?? mySeatStack ?? 0;
+
+  // Top-off cap is 200 × big_blind. The table's big_blind is visible on
+  // any public state we've seen.
+  const bigBlind = publicState?.big_blind ?? 10;
+  const maxStack = 200 * bigBlind;
+
   // Clear private state if I'm not seated (e.g. after busting out).
   useEffect(() => {
     if (!seated) setPrivateState(null);
   }, [seated]);
+
+  // Top-off endpoint — POST then let the seats event do the UI update.
+  const topOff = async (amount: number) => {
+    if (!handle || !code || amount <= 0) return;
+    setError(null);
+    try {
+      const res = await fetch(`/api/tables/top_off?as=${encodeURIComponent(handle)}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, amount }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        setError(`Top off failed: ${text}`);
+      }
+    } catch (err) {
+      setError(`Top off failed: ${err}`);
+    }
+  };
 
   const join = async (seatNumber: number) => {
     if (!handle || !code) return;
@@ -154,14 +199,24 @@ export function TablePage() {
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
       <div
+        className="page-header"
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          flexWrap: "wrap",
+          gap: "0.5rem",
         }}
       >
         <h2 style={{ margin: 0 }}>Table {code}</h2>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+            flexWrap: "wrap",
+          }}
+        >
           <NarrationLink code={code ?? ""} />
           {viewerCount > 0 && (
             <span
@@ -224,6 +279,42 @@ export function TablePage() {
         seats={seats}
         potDistributions={potDistributions}
       />
+
+      {waitingForNextHand && (
+        <div
+          style={{
+            padding: "0.6rem 0.9rem",
+            border: "1px solid #7fb8a4",
+            background: "#143027",
+            borderRadius: 6,
+            color: "#cfe6dd",
+            fontSize: "0.9rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+          }}
+        >
+          <span style={{ fontSize: "1.1rem" }}>⏳</span>
+          <span>
+            You're seated for the next hand. Waiting for the current one
+            to finish.
+          </span>
+        </div>
+      )}
+
+      {seated && (
+        <TopOffBar
+          myStack={myStack}
+          bigBlind={bigBlind}
+          maxStack={maxStack}
+          // Top-off is blocked by the server only when I'm an active
+          // participant in the current hand. If I'm waiting for the next
+          // hand, sitting out, or the hand is between deals, it's allowed.
+          canTopOff={!(myPublicPlayer && handInProgress)}
+          handInProgress={handInProgress}
+          onTopOff={topOff}
+        />
+      )}
 
       {seated && <HoleCards privateState={privateState} />}
 
@@ -548,6 +639,93 @@ function SeatPicker({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function TopOffBar({
+  myStack,
+  bigBlind,
+  maxStack,
+  canTopOff,
+  handInProgress,
+  onTopOff,
+}: {
+  myStack: number;
+  bigBlind: number;
+  maxStack: number;
+  canTopOff: boolean;
+  handInProgress: boolean;
+  onTopOff: (amount: number) => void;
+}) {
+  // The amount that would bring you back up to the cap.
+  const headroom = Math.max(0, maxStack - myStack);
+  // Hide entirely when there's no headroom (already at max).
+  if (headroom === 0) return null;
+  // Suggested quick amount: round up the headroom needed to fill to max,
+  // capped at the actual headroom. For UX, also offer "Fill to max".
+  const oneBuyIn = Math.min(headroom, 100 * bigBlind);
+  return (
+    <div
+      className="top-off-bar"
+      style={{
+        padding: "0.5rem 0.9rem",
+        border: "1px solid #2a4d3f",
+        borderRadius: 6,
+        background: "#0e1f1a",
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: "0.75rem",
+        fontSize: "0.85rem",
+      }}
+    >
+      <span style={{ opacity: 0.75 }}>
+        Your stack: <strong style={{ opacity: 1 }}>{myStack}</strong>{" "}
+        <span style={{ opacity: 0.5 }}>/ {maxStack}</span>
+      </span>
+      <div style={{ flex: 1 }} />
+      {canTopOff ? (
+        <>
+          {oneBuyIn > 0 && oneBuyIn < headroom && (
+            <button
+              onClick={() => onTopOff(oneBuyIn)}
+              style={{
+                padding: "0.35rem 0.75rem",
+                background: "transparent",
+                border: "1px solid #2a4d3f",
+                color: "inherit",
+                borderRadius: 6,
+                fontSize: "0.85rem",
+                cursor: "pointer",
+              }}
+            >
+              + {oneBuyIn}
+            </button>
+          )}
+          <button
+            onClick={() => onTopOff(headroom)}
+            style={{
+              padding: "0.35rem 0.85rem",
+              background: "#c89c3a",
+              color: "#000",
+              border: 0,
+              borderRadius: 6,
+              fontSize: "0.85rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Fill to {maxStack}
+          </button>
+        </>
+      ) : (
+        <span style={{ fontSize: "0.8rem", opacity: 0.6, fontStyle: "italic" }}>
+          {handInProgress
+            ? "Top off available between hands"
+            : "Top off unavailable"}
+        </span>
+      )}
     </div>
   );
 }

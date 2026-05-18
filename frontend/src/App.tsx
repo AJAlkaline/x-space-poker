@@ -265,6 +265,8 @@ export function App() {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: "0.5rem",
         }}
       >
         <Link to="/" style={{ textDecoration: "none", color: "inherit" }}>
@@ -287,7 +289,7 @@ export function App() {
           </button>
         </div>
       </header>
-      <main style={{ flex: 1, padding: "1.5rem" }}>
+      <main className="app-shell" style={{ flex: 1, padding: "1.5rem" }}>
         <Outlet />
       </main>
     </div>

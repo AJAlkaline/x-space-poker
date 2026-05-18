@@ -57,6 +57,7 @@ export function EventLog({ entries }: EventLogProps) {
 
   return (
     <div
+      className="event-log"
       style={{
         display: "grid",
         gridTemplateRows: "auto 1fr",

@@ -44,3 +44,86 @@ input {
   background: #1a1d23;
   color: #e6e6e6;
 }
+
+/* The application's main container — set in App.tsx. Keep it sized
+   sensibly on both desktop and mobile. */
+.app-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+/* Header on table/lobby pages — title, status badges, narration link. */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Mobile breakpoint. Goals:
+   - reduce outer padding so we don't waste a third of the viewport on margin
+   - make the table view's player tiles more compact (font, padding, gap)
+   - make form controls full-width and easier to tap
+   - stack things vertically that were side-by-side on desktop */
+@media (max-width: 640px) {
+  .app-shell {
+    padding: 0.5rem;
+  }
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .page-header h2 {
+    font-size: 1.15rem;
+    margin: 0;
+  }
+  /* Table view: tighter padding + smaller min-column so two tiles fit
+     side-by-side on a 375px viewport. */
+  .table-frame {
+    padding: 1rem 0.5rem !important;
+  }
+  .table-players {
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)) !important;
+    gap: 0.5rem !important;
+  }
+  .table-players > div {
+    padding: 0.5rem !important;
+    font-size: 0.85rem;
+  }
+  /* Event log: shorter on mobile so the table stays in view. */
+  .event-log {
+    height: 160px !important;
+  }
+  /* Action bar: presets should wrap nicely, number input wide enough. */
+  .action-bar input[type="number"] {
+    width: 100%;
+  }
+  /* Hole cards strip can wrap onto two lines on mobile. Already wraps. */
+  /* Top-off bar: stack the buttons under the stack text on narrow screens. */
+  .top-off-bar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  /* Lobby create-table form: stack vertically. */
+  .lobby-create-form {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  .lobby-create-form > * {
+    width: 100% !important;
+  }
+  /* Number inputs at proper iOS font size to prevent zoom-on-focus. */
+  input[type="number"], input[type="text"] {
+    font-size: 16px;
+  }
+}
+
+/* Very narrow screens (older iPhones, 320px) — make sure the player
+   tiles can still fit at least one per row without horizontal scroll. */
+@media (max-width: 380px) {
+  .table-players {
+    grid-template-columns: 1fr !important;
+  }
+}

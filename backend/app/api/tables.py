@@ -81,6 +81,11 @@ class JoinTableRequest(BaseModel):
     buy_in: int = Field(gt=0)
 
 
+class TopOffRequest(BaseModel):
+    code: str
+    amount: int = Field(gt=0)
+
+
 class TableInfoResponse(BaseModel):
     table_id: str
     code: str
@@ -143,6 +148,49 @@ async def join_table(req: JoinTableRequest, player_id: PlayerId) -> dict:
         adjust_balance(player_id, req.buy_in)
         raise HTTPException(400, str(e)) from e
     return {"table_id": rt.table_id, "seat": req.seat, "stack": req.buy_in}
+
+
+@router.post("/top_off")
+async def top_off(req: TopOffRequest, player_id: PlayerId) -> dict:
+    """Add chips to your existing seat without leaving. Only allowed
+    between hands (not mid-hand) to avoid mid-action stack changes that
+    would confuse pot accounting.
+
+    Total stack post-top-off is capped at the table's max buy-in
+    (200 * big_blind by default — same as initial buy-in cap)."""
+    mgr = get_manager()
+    rt = mgr.get_by_code(req.code)
+    if rt is None:
+        raise HTTPException(404, "table not found")
+    bb = rt.config.big_blind
+    max_stack = 200 * bb
+    try:
+        new_stack = mgr.top_off_player(
+            rt.table_id, player_id, req.amount, max_stack,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    if get_settings().persistence_enabled:
+        # Debit from the player's bankroll account.
+        async with get_session() as s:
+            account = await persistence.ensure_account_for_handle(s, player_id)
+            try:
+                # Use the existing buy_in path; idempotency keyed on a
+                # fresh seat_id so we don't double-count.
+                await persistence.buy_in(
+                    s, account.id, req.amount,
+                    seat_id=uuid.uuid4(),
+                    table_id=uuid.UUID(rt.table_id),
+                )
+            except persistence.InsufficientFundsError as e:
+                # Roll back the in-memory top-off.
+                mgr.top_off_player(rt.table_id, player_id, -req.amount, max_stack * 10)
+                raise HTTPException(400, str(e)) from e
+    else:
+        adjust_balance(player_id, -req.amount)
+
+    return {"table_id": rt.table_id, "stack": new_stack}
 
 
 @router.post("/{table_id}/leave")

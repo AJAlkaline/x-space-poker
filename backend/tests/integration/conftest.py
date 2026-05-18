@@ -34,6 +34,7 @@ import contextlib
 
 import pytest
 
+from app.api import auth as auth_module
 from app.services import audio_bus, table_manager, tts
 
 
@@ -47,6 +48,11 @@ def reset_table_manager_singleton():
     and crash when their event loop is closed, generating spurious
     'Event loop is closed' unraisable exceptions that pytest escalates
     to test failures.
+
+    Also resets the in-memory player balance dict — otherwise tests
+    accumulate state because each buy-in subtracts from a process-global
+    dict. A test running late in the file would see a different starting
+    balance than the same test in isolation.
     """
     yield
     mgr = table_manager._manager
@@ -62,3 +68,5 @@ def reset_table_manager_singleton():
     table_manager._manager = None
     audio_bus._bus = None
     tts._service = None
+    # Reset per-player balance state so each test starts at the default.
+    auth_module._balances.clear()

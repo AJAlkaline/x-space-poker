@@ -60,7 +60,11 @@ export function LobbyPage() {
 
       <section>
         <h2>Join a table</h2>
-        <form onSubmit={handleJoin} style={{ display: "flex", gap: "0.5rem" }}>
+        <form
+          onSubmit={handleJoin}
+          className="lobby-create-form"
+          style={{ display: "flex", gap: "0.5rem" }}
+        >
           <input
             placeholder="Table code (e.g. ABC234)"
             value={joinCode}

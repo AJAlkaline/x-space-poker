@@ -323,6 +323,62 @@ def test_hand_number_is_on_public_state(client: TestClient) -> None:
         assert started["state"].get("hand_number") == 1
 
 
+def test_current_hand_is_on_private_state_post_flop(client: TestClient) -> None:
+    """The player's private state carries `current_hand`: a description of
+    their best 5-card hand right now, populated on the flop and later.
+    Pre-flop it's null (only 2 cards visible)."""
+    res = client.post(
+        "/api/tables", params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+    with client.websocket_connect(f"/ws/tables/{code}?as=alice") as ws_a, \
+         client.websocket_connect(f"/ws/tables/{code}?as=bob") as ws_b:
+        for who, seat in [("alice", 0), ("bob", 1)]:
+            client.post(
+                "/api/tables/join", params={"as": who},
+                json={"code": code, "seat": seat, "buy_in": 1000},
+            )
+        _drain_until(ws_a, ["hand_started"])
+        _drain_until(ws_b, ["hand_started"])
+
+        # Drain through to the flop. We expect `current_hand` to be null
+        # for any private messages we see pre-flop, and populated for any
+        # message we see at flop or later.
+        sockets = {"alice": ws_a, "bob": ws_b}
+        seen_preflop_null = False
+        seen_postflop_populated = False
+        for _ in range(40):
+            for _who, ws in sockets.items():
+                msg = ws.receive_json()
+                t = msg.get("type")
+                if t == "private":
+                    ch = msg["state"].get("current_hand")
+                    # The pre-flop case: hole cards only, no flop yet.
+                    if ch is None and not seen_postflop_populated:
+                        seen_preflop_null = True
+                    elif ch is not None:
+                        # Got a populated current_hand. Verify shape.
+                        assert "description" in ch
+                        assert ch["description"]  # non-empty
+                        assert len(ch["best_five"]) == 5
+                        seen_postflop_populated = True
+                if (
+                    t == "private"
+                    and msg["state"]["your_turn"]
+                    and not seen_postflop_populated
+                ):
+                    legals = [la["action_type"] for la in msg["state"]["legal_actions"]]
+                    if "check" in legals:
+                        ws.send_json({"type": "action", "action": "check"})
+                    elif "call" in legals:
+                        ws.send_json({"type": "action", "action": "call"})
+            if seen_postflop_populated:
+                break
+        assert seen_preflop_null, "never saw pre-flop private with current_hand=null"
+        assert seen_postflop_populated, "never saw post-flop private with populated current_hand"
+
+
 def test_showdown_emits_hand_description_and_best_five(client: TestClient) -> None:
     """When a hand goes to showdown, pot_distributions winners carry both
     a hand description and the 5 cards that make up the winning hand."""
@@ -385,3 +441,47 @@ def test_showdown_emits_hand_description_and_best_five(client: TestClient) -> No
             assert len(w["best_five"]) == 5, (
                 f"best_five should be exactly 5 cards: {w}"
             )
+
+
+def test_top_off_increases_seated_stack(client: TestClient) -> None:
+    """A seated player can top off their stack between hands."""
+    res = client.post(
+        "/api/tables", params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+    client.post(
+        "/api/tables/join", params={"as": "alice"},
+        json={"code": code, "seat": 0, "buy_in": 500},
+    )
+    # Stack is 500, max is 200 * 10 = 2000. Top off by 300 → 800.
+    r = client.post(
+        "/api/tables/top_off", params={"as": "alice"},
+        json={"code": code, "amount": 300},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["stack"] == 800
+
+
+def test_top_off_rejected_when_at_cap(client: TestClient) -> None:
+    res = client.post(
+        "/api/tables", params={"as": "alice"},
+        json={"small_blind": 5, "big_blind": 10},
+    )
+    code = res.json()["code"]
+    client.post(
+        "/api/tables/join", params={"as": "alice"},
+        json={"code": code, "seat": 0, "buy_in": 2000},
+    )
+    # Already at max (200 * 10). Any top-off exceeds cap.
+    r = client.post(
+        "/api/tables/top_off", params={"as": "alice"},
+        json={"code": code, "amount": 100},
+    )
+    assert r.status_code == 400
+    assert "cap" in r.text.lower()
+
+
+# NOTE: test_top_off_rejected_mid_hand lives in test_top_off.py to avoid a
+# pytest WebSocket-portal teardown race when running after the showdown
+# test in this file. Same harness fragility documented in conftest.py.

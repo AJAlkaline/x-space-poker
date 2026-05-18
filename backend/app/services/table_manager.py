@@ -229,6 +229,54 @@ class TableManager:
         rt.seat_state[player_id] = SeatRuntimeState(time_bank_seconds=TIMEBANK_MAX)
         rt.seats_changed.set()
 
+    def top_off_player(
+        self, table_id: str, player_id: str, amount: int, max_stack: int,
+    ) -> int:
+        """Add chips to a seated player's stack between hands.
+
+        Only allowed when the player is NOT currently in an active hand
+        (between hands, or sitting out). Mid-hand stack changes would
+        break pot accounting and effective-stack math.
+
+        Capped at `max_stack` — typically 200*BB. If the player is already
+        at or above the cap, raises ValueError.
+
+        Returns the new stack value. May raise ValueError (player not
+        seated, mid-hand, at cap).
+        """
+        rt = self._tables[table_id]
+        seat_num = next(
+            (n for n, s in rt.seats.items() if s.user_id == player_id), None,
+        )
+        if seat_num is None:
+            raise ValueError("not seated at this table")
+
+        # Reject mid-hand top-offs. Allow between hands or while sitting out.
+        if rt.current_state and rt.current_state.phase != HandPhase.COMPLETE:
+            p = rt.current_state.player_by_id(player_id)
+            if p is not None and p.status in (
+                PlayerStatus.ACTIVE, PlayerStatus.ALL_IN,
+            ):
+                raise ValueError(
+                    "cannot top off mid-hand — wait until the hand ends",
+                )
+
+        seat = rt.seats[seat_num]
+        new_stack = seat.stack + amount
+        if amount > 0 and new_stack > max_stack:
+            raise ValueError(
+                f"top-off would exceed cap of {max_stack} "
+                f"(current stack {seat.stack}, requested +{amount})",
+            )
+        if new_stack < 0:
+            raise ValueError(f"resulting stack {new_stack} would be negative")
+        rt.seats[seat_num] = SeatConfig(
+            user_id=seat.user_id, seat=seat.seat,
+            stack=new_stack, sitting_out=seat.sitting_out,
+        )
+        rt.seats_changed.set()
+        return new_stack
+
     def unseat_player(self, table_id: str, player_id: str) -> int:
         rt = self._tables[table_id]
         seat_num = next(
@@ -457,20 +505,36 @@ class TableManager:
                 rt.hand_number += 1
                 rt.hand_action_sequence = 0
 
+                # Compute the first-to-act's deadline so the timer is
+                # visible to all clients (not just the to-act player) from
+                # the moment the hand starts.
+                first_to_act = (
+                    rt.current_state.betting.to_act[0]
+                    if rt.current_state.betting.to_act else None
+                )
+                first_deadline_ms: int | None = None
+                if first_to_act is not None:
+                    ss = rt.seat_state.get(first_to_act)
+                    bank_remaining = ss.time_bank_seconds if ss else 0.0
+                    total_budget_s = ACTION_TIMER_SECONDS + bank_remaining
+                    first_deadline_ms = int(
+                        (time.time() + total_budget_s) * 1000,
+                    )
+
                 rt.bus.publish_public(HandStartedEvent(
                     table_id=rt.table_id,
                     hand_id=rt.current_state.hand_id,
                     hand_number=rt.hand_number,
                     deck_commit=rt.current_state.deck_commit,
-                    public_state=_public_view(rt.current_state, hand_number=rt.hand_number),
+                    public_state=_public_view(
+                        rt.current_state,
+                        hand_number=rt.hand_number,
+                        to_act_deadline_unix_ms=first_deadline_ms,
+                    ),
                 ))
 
                 # Send private views to all in-hand players except the to-act
                 # player — they get a deadline-bearing view from the action loop.
-                first_to_act = (
-                    rt.current_state.betting.to_act[0]
-                    if rt.current_state.betting.to_act else None
-                )
                 for p in rt.current_state.players:
                     if p is None or p.id == first_to_act:
                         continue
@@ -587,6 +651,26 @@ class TableManager:
                         continue
 
                     rt.hand_action_sequence += 1
+                    # Compute the deadline for the next to-act player, if
+                    # any. This deadline is what the action loop itself
+                    # will use on the next iteration (started_at gets reset
+                    # to now() when current_round_key changes). By embedding
+                    # the same deadline in the public state, every client
+                    # — including spectators and players who aren't acting
+                    # — can render a live countdown for the active player.
+                    next_to_act = (
+                        rt.current_state.betting.to_act[0]
+                        if rt.current_state.betting.to_act else None
+                    )
+                    next_deadline_ms: int | None = None
+                    if next_to_act is not None:
+                        ss = rt.seat_state.get(next_to_act)
+                        bank_remaining = ss.time_bank_seconds if ss else 0.0
+                        total_budget_s = ACTION_TIMER_SECONDS + bank_remaining
+                        next_deadline_ms = int(
+                            (time.time() + total_budget_s) * 1000,
+                        )
+
                     rt.bus.publish_public(ActionAppliedEvent(
                         table_id=rt.table_id,
                         hand_id=rt.current_state.hand_id,
@@ -595,13 +679,14 @@ class TableManager:
                         action_type=action.action_type.value,
                         amount=action.amount,
                         auto=is_auto,
-                        public_state=_public_view(rt.current_state, hand_number=rt.hand_number),
+                        public_state=_public_view(
+                            rt.current_state,
+                            hand_number=rt.hand_number,
+                            to_act_deadline_unix_ms=next_deadline_ms,
+                        ),
                     ))
 
-                    new_to_act = (
-                        rt.current_state.betting.to_act[0]
-                        if rt.current_state.betting.to_act else None
-                    )
+                    new_to_act = next_to_act
                     for pp in rt.current_state.players:
                         if pp is None or pp.id == new_to_act:
                             continue
@@ -855,7 +940,10 @@ def _compute_positions(state: GameState) -> dict[str, str]:
 
 
 def _public_view(
-    state: GameState, reveal: bool = False, hand_number: int = 0,
+    state: GameState,
+    reveal: bool = False,
+    hand_number: int = 0,
+    to_act_deadline_unix_ms: int | None = None,
 ) -> dict:
     pot_total = sum(p.total_committed for p in state.players if p is not None)
     positions = _compute_positions(state)
@@ -872,6 +960,11 @@ def _public_view(
         "current_bet": state.betting.current_bet,
         "min_raise": state.betting.min_raise,
         "to_act": list(state.betting.to_act),
+        # Absolute timestamp by which the to-act player must respond. Set
+        # whenever a fresh deadline is computed (start of each player's
+        # turn). Clients render countdown badges from this. None when no
+        # deadline applies (between hands, hand complete, etc).
+        "to_act_deadline_unix_ms": to_act_deadline_unix_ms,
         "button": state.button,
         "small_blind": state.small_blind,
         "big_blind": state.big_blind,
@@ -907,6 +1000,29 @@ def _private_view(
     if p is None:
         return None
     legals = legal_actions(state, player_id)
+
+    # Best made hand right now, given the player's hole cards and the
+    # current board. Computed only when we have 5+ total cards (flop or
+    # later) and the player is still in the hand with revealed holes.
+    # Pre-flop has no "best hand" to report and showing one would be
+    # misleading. Folded players also get None — they're not contesting.
+    current_hand: dict | None = None
+    if (
+        p.hole
+        and len(p.hole) == 2
+        and p.status != PlayerStatus.FOLDED
+        and len(state.board) >= 3
+    ):
+        try:
+            strength = evaluate_hand(list(p.hole), list(state.board))
+            current_hand = {
+                "description": strength.description,
+                "best_five": [str(c) for c in strength.best_five],
+            }
+        except ValueError:
+            # Shouldn't happen given the guards above, but be defensive.
+            pass
+
     return {
         "hole": [str(c) for c in p.hole] if p.hole else None,
         "your_turn": (
@@ -924,6 +1040,7 @@ def _private_view(
         "bank_deadline_unix_ms": bank_deadline_unix_ms,
         "timebank_remaining_ms": timebank_remaining_ms,
         "action_timer_seconds": action_timer_seconds,
+        "current_hand": current_hand,
     }
 
 

@@ -80,11 +80,21 @@ export function ActionBar({
 }: ActionBarProps) {
   const legals = privateState?.legal_actions ?? [];
   const yourTurn = privateState?.your_turn ?? false;
+  // Numeric source of truth for the bet/raise amount. Always a valid number.
   const [betAmount, setBetAmount] = useState<number>(0);
+  // Raw text in the number input. Tracked separately so the user can type
+  // multi-digit numbers without the controlled-input value snapping back
+  // to `min` on each keystroke. Synced from `betAmount` when the field
+  // isn't focused, so external changes (presets, slider) reflect here.
+  const [betInputText, setBetInputText] = useState<string>("");
+  const [numberInputFocused, setNumberInputFocused] = useState(false);
 
   // Reset bet amount when it's no longer your turn (so the slider starts fresh next time).
   useEffect(() => {
-    if (!yourTurn) setBetAmount(0);
+    if (!yourTurn) {
+      setBetAmount(0);
+      setBetInputText("");
+    }
   }, [yourTurn, publicState?.hand_id]);
 
   const stateConsistent =
@@ -115,7 +125,26 @@ export function ActionBar({
 
   const minSize = sizer?.min_amount ?? 0;
   const maxSize = sizer?.max_amount ?? 0;
+  // The amount we'd submit if the user clicks Bet/Raise *right now*.
+  // Clamped to the legal range. Used for the Bet/Raise button labels and
+  // for the slider's `value` (sliders are inherently clamped controls).
   const clampedAmount = Math.min(maxSize, Math.max(minSize, betAmount || minSize));
+
+  // The number input's visible value. While the field is focused, we show
+  // exactly what the user typed (even invalid intermediate states like
+  // "" or "3"). When the field is blurred, we show the clamped amount.
+  const numberInputValue = numberInputFocused
+    ? betInputText
+    : String(clampedAmount);
+
+  // When a preset/slider changes betAmount, mirror the new value into the
+  // text-input buffer so the next time the user focuses the number field
+  // they see the up-to-date value.
+  useEffect(() => {
+    if (!numberInputFocused) {
+      setBetInputText(String(clampedAmount));
+    }
+  }, [clampedAmount, numberInputFocused]);
 
   const pot = publicState.pot_total;
   const presets = [
@@ -127,6 +156,7 @@ export function ActionBar({
 
   return (
     <div
+      className="action-bar"
       style={{
         padding: "1rem",
         border: "2px solid #f5c542",
@@ -189,8 +219,45 @@ export function ActionBar({
             type="number"
             min={minSize}
             max={maxSize}
-            value={clampedAmount}
-            onChange={(e) => setBetAmount(Number(e.target.value))}
+            step={1}
+            value={numberInputValue}
+            onFocus={(e) => {
+              setNumberInputFocused(true);
+              // Select the existing value so the user can start typing
+              // immediately without manually clearing the field.
+              e.target.select();
+            }}
+            onChange={(e) => {
+              // While focused, take the raw string. Don't snap to min —
+              // that's the bug we're fixing. Parsing happens on blur.
+              setBetInputText(e.target.value);
+              // Also update betAmount as we go, but only if the text
+              // parses to a non-NaN integer. This keeps the slider and
+              // button labels in sync with what you're typing without
+              // clobbering the input field. Clamping for submission
+              // happens via `clampedAmount` at click time.
+              const parsed = Number(e.target.value);
+              if (!Number.isNaN(parsed)) {
+                setBetAmount(Math.floor(parsed));
+              }
+            }}
+            onBlur={() => {
+              setNumberInputFocused(false);
+              // On blur, commit a clean clamped integer value. If the
+              // user typed something invalid (empty, NaN, decimal,
+              // out-of-range), they'll see the legal value pop in.
+              setBetAmount(clampedAmount);
+              setBetInputText(String(clampedAmount));
+            }}
+            onKeyDown={(e) => {
+              // Enter submits the current bet/raise. Better UX than
+              // Tab-then-click for keyboard-driven players.
+              if (e.key === "Enter") {
+                e.currentTarget.blur();
+                if (bet) onAction("bet", clampedAmount);
+                else if (raise) onAction("raise", clampedAmount);
+              }
+            }}
           />
           <div style={{ fontSize: "0.85rem", opacity: 0.7 }}>
             Min {minSize} · Max {maxSize}

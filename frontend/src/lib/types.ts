@@ -56,6 +56,8 @@ export interface PotDistribution {
 
 export interface PublicState {
   hand_id: string;
+  /** Session hand counter (1-indexed). 0 when no hand has been dealt yet. */
+  hand_number: number;
   phase: Phase;
   board: string[];
   pots: PublicPot[];
@@ -63,6 +65,11 @@ export interface PublicState {
   current_bet: number;
   min_raise: number;
   to_act: string[];
+  /** Absolute Unix epoch milliseconds by which the to-act player must act.
+   *  Used by clients to render countdown badges for the active player
+   *  visible to everyone, not just the actor. Null between hands or at
+   *  hand complete. */
+  to_act_deadline_unix_ms: number | null;
   button: number;
   small_blind: number;
   big_blind: number;
@@ -83,6 +90,14 @@ export interface PrivateState {
   bank_deadline_unix_ms: number | null;
   timebank_remaining_ms: number | null;
   action_timer_seconds: number | null;
+  /** Best 5-card hand the player currently has, given their hole cards
+   *  plus the visible board. Populated on the flop and later. Null
+   *  pre-flop (when the player has only 2 cards) or when the player is
+   *  folded/not in the hand. */
+  current_hand: {
+    description: string;
+    best_five: string[];
+  } | null;
 }
 
 export interface SeatInfo {

@@ -251,10 +251,13 @@ export function AudioPage() {
   return (
     <div style={{ maxWidth: 640, margin: "0 auto", display: "grid", gap: "1.5rem" }}>
       <div
+        className="page-header"
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "baseline",
+          flexWrap: "wrap",
+          gap: "0.5rem",
         }}
       >
         <h2 style={{ margin: 0 }}>Live narration: table {code}</h2>

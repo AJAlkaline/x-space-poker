@@ -74,10 +74,13 @@ export function SpectatePage() {
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
       <div
+        className="page-header"
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          flexWrap: "wrap",
+          gap: "0.5rem",
         }}
       >
         <h2 style={{ margin: 0 }}>
